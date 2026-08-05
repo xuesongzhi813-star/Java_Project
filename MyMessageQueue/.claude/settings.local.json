@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Content \"D:\\\\Java项目\\\\MyMessageQueue\\\\src\\\\main\\\\java\\\\org\\\\example\\\\mymessagequeue\\\\mqserver\\\\datacenter\\\\MessageFileManager.java\" | Select-Object -Skip 226 -First 5 | ForEach-Object { [System.Text.Encoding]::UTF8.GetBytes\\($_\\) | ForEach-Object { '{0:X2}' -f $_ }; Write-Output \"  <- $_\" })"
+    ]
+  }
+}
