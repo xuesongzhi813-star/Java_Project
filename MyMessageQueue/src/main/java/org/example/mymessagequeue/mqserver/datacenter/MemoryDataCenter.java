@@ -70,7 +70,7 @@ public class MemoryDataCenter {
     //“队列”删除
     public void deleteQueue(String queueName){
         queueMap.remove(queueName);
-        System.out.println("队列"+queueName+"插入成功");
+        System.out.println("队列"+queueName+"删除成功");
     }
 
     //查询指定”队列“
@@ -124,6 +124,18 @@ public class MemoryDataCenter {
         return stringBindingConcurrentHashMap;
     }
 
+    //根据queueName获取所有关联的绑定集合（遍历所有交换机下的绑定）
+    public List<Binding> getBindingsByQueueName(String queueName){
+        List<Binding> result = new LinkedList<>();
+        for (ConcurrentHashMap<String, Binding> innerMap : bindingMap.values()) {
+            Binding binding = innerMap.get(queueName);
+            if (binding != null) {
+                result.add(binding);
+            }
+        }
+        return result;
+    }
+
     //删除绑定
     public void deleteBinding(Binding binding) throws mqException {
         //先通过exchangeName查询，依附队列存在的绑定是否存在
@@ -134,7 +146,9 @@ public class MemoryDataCenter {
             +",queueName:"+binding.getExchangeName());
         }
         //存在则删除
-        stringBindingConcurrentHashMap.remove(binding);
+//        stringBindingConcurrentHashMap.remove(binding);
+        stringBindingConcurrentHashMap.remove(binding.getMessageQueueName());
+//        bindingMap.remove(binding.getExchangeName(),stringBindingConcurrentHashMap);
         System.out.println("[MemoryDataCenter] 绑定已删除 exchangeName:"+binding.getExchangeName()
                 +",queueName:"+binding.getExchangeName());
     }
@@ -228,6 +242,7 @@ public class MemoryDataCenter {
         if(stringMessageConcurrentHashMap.get(messageId)!=null) {
             synchronized (stringMessageConcurrentHashMap) {
                 stringMessageConcurrentHashMap.remove(messageId);
+                System.out.println("删除未确认数据成功:"+messageId);
             }
         }else {
             return;

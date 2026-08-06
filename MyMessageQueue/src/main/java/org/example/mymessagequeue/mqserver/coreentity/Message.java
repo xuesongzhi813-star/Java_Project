@@ -52,7 +52,7 @@ public class Message implements Serializable {
 
     //创建的工厂方法，封装Message的创建
     //Message创建=基本属性类+额外属性
-    public Message FactoryMessage(byte[] body,BasicProperties properties,String routingKey){
+    public  static Message FactoryMessage(byte[] body,BasicProperties properties,String routingKey){
         Message message=new Message();
         //若参数属性类不为空，覆盖原本属性类
         if(properties!=null){

@@ -47,13 +47,15 @@ public class DiskDataCenter {
      * 封装对队列的增，删，查：
      */
     //插入队列
-    public void insertQueue(MessageQueue queue){
+    public void insertQueue(MessageQueue queue) throws IOException {
         dataBaseManager.insertQueue(queue);
+        messageFileManager.createMkdir(queue.getName());
         System.out.println("队列插入成功:"+queue.getName());
     }
     //删除队列
-    public void deleteQueue(String queueName){
+    public void deleteQueue(String queueName) throws IOException {
         dataBaseManager.deleteQueue(queueName);
+        messageFileManager.deleteMkdirAndFile(queueName);
         System.out.println("队列删除成功:"+queueName);
     }
     //查询所有队列
