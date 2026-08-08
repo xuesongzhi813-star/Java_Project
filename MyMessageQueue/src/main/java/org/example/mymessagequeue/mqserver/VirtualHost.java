@@ -1,5 +1,7 @@
 package org.example.mymessagequeue.mqserver;
 
+import org.example.mymessagequeue.common.Consumer;
+import org.example.mymessagequeue.common.ConsumerEnv;
 import org.example.mymessagequeue.common.mqException;
 import org.example.mymessagequeue.mqserver.coreentity.*;
 import org.example.mymessagequeue.mqserver.datacenter.DiskDataCenter;
@@ -20,6 +22,19 @@ public class VirtualHost {
     private DiskDataCenter diskDataCenter=new DiskDataCenter();
     private MemoryDataCenter memoryDataCenter=new MemoryDataCenter();
     private Router router=new Router();
+    ConsumerManager consumerManager=new ConsumerManager(this);
+
+    public String getVirtualHostName() {
+        return virtualHostName;
+    }
+
+    public DiskDataCenter getDiskDataCenter() {
+        return diskDataCenter;
+    }
+
+    public MemoryDataCenter getMemoryDataCenter() {
+        return memoryDataCenter;
+    }
 
     //锁对象
     private Object exchangeLocker=new Object();
@@ -275,7 +290,7 @@ public class VirtualHost {
                                 //判断是否要发送给队列/
                                 //FANOUT
                                 //TOPIC
-                                if (!Router.route(exchange.getExchageType(), binding, message)) {
+                                if (!Router.routeTopic(exchange.getExchageType(), binding, message)) {
                                     continue;
                                 }
                                 sendMessage(queue, message);
@@ -291,11 +306,29 @@ public class VirtualHost {
         return true;
     }
 
-    private void sendMessage(MessageQueue queue, Message message) throws mqException, IOException {
+    private void sendMessage(MessageQueue queue, Message message) throws mqException, IOException, InterruptedException {
         if (message.getDurable()){
             diskDataCenter.sendMessage(queue,message);
         }
         memoryDataCenter.sendMessage(queue,message);
-        //TODO告诉消费者可以取消息了
+        //通知消费者，消费消息了
+        consumerManager.notifyConsumer(queue.getName());
+    }
+
+    //7.消费消息
+    public boolean basicConsume(String counsumerTag,String queueName,boolean autoAck, Consumer consumer){
+        queueName=virtualHostName+queueName;
+        try {
+            //构造消费者对象
+            ConsumerEnv consumerEnv=new ConsumerEnv(counsumerTag,queueName,autoAck,consumer);
+            //
+            consumerManager.addConsumer(counsumerTag,queueName,autoAck,consumer);
+            System.out.println("[VirtualHostName] basicConsume成功！");
+            return true;
+        }catch (Exception e){
+            e.printStackTrace();
+            System.out.println("[VirtualHostname] basicConsume失败！");
+        }
+        return false;
     }
 }

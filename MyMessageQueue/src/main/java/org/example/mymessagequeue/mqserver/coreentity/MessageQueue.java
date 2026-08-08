@@ -1,12 +1,12 @@
 package org.example.mymessagequeue.mqserver.coreentity;
 
 import lombok.Data;
+import org.example.mymessagequeue.common.ConsumerEnv;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Data
 public class MessageQueue {
@@ -20,6 +20,11 @@ public class MessageQueue {
     private boolean autoDelete;
     //额外属性
     private Map<String, Object> arguments=new HashMap<>();
+    //管理“订阅了本队列”的消费者
+    private List<ConsumerEnv> consumerEnvList=new ArrayList<>();
+    //轮流消费时，消费者下标
+    private AtomicInteger integer=new AtomicInteger(0);
+
 
     public String getName() {
         return name;
@@ -91,4 +96,30 @@ public class MessageQueue {
         this.arguments=arguments;
     }
 
+    /**
+     * 对订阅的消费者的统一管理方法：
+     */
+    //添加订阅的消费者
+    public void addConsumerEnv(ConsumerEnv consumerEnv){
+        consumerEnvList.add(consumerEnv);
+    }
+
+    //删除订阅的消费者
+    public void deleteConsumerEnv(ConsumerEnv consumerEnv){
+
+    }
+
+    //订阅的消费者集合轮流“消费消息”
+    public ConsumerEnv chooseConsumerEnv(){
+        //判断是否有人订阅
+        if(consumerEnvList.size()==0){
+            return null;
+        }
+        //订阅的消费者轮流取出消息消费
+        int index=integer.get() % consumerEnvList.size();
+        //下标随着轮流到下一个
+        integer.getAndIncrement();
+        ConsumerEnv consumerEnv=consumerEnvList.get(index);
+        return consumerEnv;
+    }
 }
