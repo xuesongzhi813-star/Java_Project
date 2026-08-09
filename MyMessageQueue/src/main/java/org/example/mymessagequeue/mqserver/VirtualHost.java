@@ -161,12 +161,12 @@ public class VirtualHost {
                 if (existQueue == null) {
                     throw new mqException("[VirtualHostName] 队列不存在:" + name);
                 }
-                //先找到该队列关联的所有绑定，逐一解绑（先删内存绑定关系，再删硬盘绑定记录）
+                //先找到该队列关联的所有绑定，逐一解绑（先删硬盘绑定记录，再删内存绑定关系）
                 List<Binding> bindings = memoryDataCenter.getBindingsByQueueName(name);
                 if (bindings != null && !bindings.isEmpty()) {
                     for (Binding binding : bindings) {
-                        memoryDataCenter.deleteBinding(binding);
                         diskDataCenter.deleteBinding(binding);
+                        memoryDataCenter.deleteBinding(binding);
                     }
                 }
                 //再删除队列（先删硬盘，再删内存）
@@ -216,7 +216,7 @@ public class VirtualHost {
                     memoryDataCenter.insertBinding(binding);
                 } catch (Exception e) {
                     System.out.println("[VirtualHostName] 绑定创建失败:" + bindingKey + ",exchangeName:" + exchangeN
-                            + ",queueName:" + queueN);
+                            + ",queueName:" + queueN+e.getMessage());
                     return false;
                 }
             }
@@ -225,16 +225,16 @@ public class VirtualHost {
     }
 
     //6.删除绑定
-    public boolean bindingDelete(Binding binding){
-        String exchangeName=virtualHostName+binding.getExchangeName();
-        String queueName=virtualHostName+binding.getMessageQueueName();
+    public boolean bindingDelete(String queuename,String exchangename){
+        String exchangeName=virtualHostName+exchangename;
+        String queueName=virtualHostName+queuename;
         synchronized (exchangeLocker) {
             synchronized (queueLocker) {
                 try {
                     //检查是否存在
                     Binding uniqueBinding = memoryDataCenter.getUniqueBinding(exchangeName, queueName);
                     if (uniqueBinding == null) {
-                        throw new mqException("[VirtualHostName] 绑定不存在:" + binding.getBindingKey() + ",exchangeName:" + exchangeName
+                        throw new mqException("[VirtualHostName] 绑定不存在:" + uniqueBinding.getBindingKey() + ",exchangeName:" + exchangeName
                                 + ",queueName:" + queueName);
                     }
                     //先解绑（删除内存中的绑定关系），再删除硬盘中的绑定记录
@@ -315,14 +315,12 @@ public class VirtualHost {
         consumerManager.notifyConsumer(queue.getName());
     }
 
-    //7.消费消息
-    public boolean basicConsume(String counsumerTag,String queueName,boolean autoAck, Consumer consumer){
+    //7.订阅消息
+    public boolean basicConsume(String consumerTag,String queueName,boolean autoAck, Consumer consumer){
         queueName=virtualHostName+queueName;
         try {
-            //构造消费者对象
-            ConsumerEnv consumerEnv=new ConsumerEnv(counsumerTag,queueName,autoAck,consumer);
-            //
-            consumerManager.addConsumer(counsumerTag,queueName,autoAck,consumer);
+            //构造消费者对象，实施订阅，添加到订阅者集合中
+            consumerManager.addConsumer(consumerTag,queueName,autoAck,consumer);
             System.out.println("[VirtualHostName] basicConsume成功！");
             return true;
         }catch (Exception e){
@@ -330,5 +328,33 @@ public class VirtualHost {
             System.out.println("[VirtualHostname] basicConsume失败！");
         }
         return false;
+    }
+
+    //手动应答消息消费
+    public boolean basicAck(String queueName,String messageId){
+        //确认消息+队列存在
+        try {
+            MessageQueue queue = memoryDataCenter.getQueue(queueName);
+            if (queue == null) {
+                throw new mqException("[VirtualHost] 该队列不存在:"+queueName);
+            }
+            Message message = memoryDataCenter.getById(messageId);
+            if(message==null){
+                throw new mqException("[VirtualHost] 该消息不存在:"+messageId);
+            }
+            //删除硬盘
+            if(message.getDurable()){
+                diskDataCenter.deleteMessage(queue,message);
+            }
+            //从未确认集合中删除
+            memoryDataCenter.deleteUnAcMessage(queueName,messageId);
+            //从消息集合中删除
+            memoryDataCenter.deleteById(messageId);
+            System.out.println("[VirtualHost] basicAck执行成功,queueName:"+queueName+",messageId:"+messageId);
+            return true;
+        }catch (Exception e){
+            System.out.println("[VirtualHost] basicAck执行失败,queueName:"+queueName+",messageId:"+messageId);
+            return false;
+        }
     }
 }

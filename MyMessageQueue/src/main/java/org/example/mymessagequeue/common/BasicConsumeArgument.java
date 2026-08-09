@@ -1,19 +1,15 @@
 package org.example.mymessagequeue.common;
 
-public class ConsumerEnv {
+import java.io.Serializable;
+
+/**
+ * 订阅消息API的“特定参数”类
+ */
+public class BasicConsumeArgument extends BasicArguments implements Serializable {
     private String consumerTag;
     private String queueName;
     private boolean autoAck;
-    //通过这个属性回调处理“接收的消息”
-    private Consumer consumer;
-
-    public ConsumerEnv(String consumerTag, String queueName, boolean autoAck, Consumer consumer) {
-        this.consumerTag = consumerTag;
-        this.queueName = queueName;
-        this.autoAck = autoAck;
-        this.consumer = consumer;
-    }
-
+    //回调函数无法实现为参数
 
     public String getConsumerTag() {
         return consumerTag;
@@ -37,13 +33,5 @@ public class ConsumerEnv {
 
     public void setAutoAck(boolean autoAck) {
         this.autoAck = autoAck;
-    }
-
-    public Consumer getConsumer() {
-        return consumer;
-    }
-
-    public void setConsumer(Consumer consumer) {
-        this.consumer = consumer;
     }
 }

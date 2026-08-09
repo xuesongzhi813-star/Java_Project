@@ -37,10 +37,9 @@ public class Router {
             return false;
         }
         //判断其中的#，*是否独立为一个单元
-        String[] splits = bindingKey.split("//.");
-        for (int i = 0; i <splits.length; i++) {
-            //如果分割的单元，某块长度>1，且含有#/*中一个则不合法
-            if(splits[i].length()>1 && (splits[i].contains("#") || splits[i].contains("*"))){
+        String[] splits = bindingKey.split("\\.");
+        for(String i:splits){
+            if(i.length()>1 && (i.contains("*") || i.contains("#"))){
                 return false;
             }
         }

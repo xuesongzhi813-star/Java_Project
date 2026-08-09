@@ -31,12 +31,12 @@ public class DiskDataCenter {
     //插入交换机
     public void insertExchange(Exchange exchange){
         dataBaseManager.insertExchange(exchange);
-        System.out.println("交换机插入成功:"+exchange.getName());
+        System.out.println("[DiskDataCenter] 交换机插入成功:"+exchange.getName());
     }
     //删除交换机
     public void deleteExchange(String exchangeName){
         dataBaseManager.deleteExchange(exchangeName);
-        System.out.println("交换机删除成功:"+exchangeName);
+        System.out.println("[DiskDataCenter] 交换机删除成功:"+exchangeName);
     }
     //查询所有交换机
     public List<Exchange> selectAllExchange(){
@@ -50,13 +50,19 @@ public class DiskDataCenter {
     public void insertQueue(MessageQueue queue) throws IOException {
         dataBaseManager.insertQueue(queue);
         messageFileManager.createMkdir(queue.getName());
-        System.out.println("队列插入成功:"+queue.getName());
+        System.out.println("[DiskDataCenter] 队列插入成功:"+queue.getName());
     }
-    //删除队列
+    //删除队列：先删DB，再删文件；文件清理失败时记录日志但不阻断
     public void deleteQueue(String queueName) throws IOException {
         dataBaseManager.deleteQueue(queueName);
-        messageFileManager.deleteMkdirAndFile(queueName);
-        System.out.println("队列删除成功:"+queueName);
+        System.out.println("[DiskDataCenter] 队列DB删除成功:" + queueName);
+        // 文件清理失败不应影响 DB 已完成的删除
+        try {
+            messageFileManager.deleteMkdirAndFile(queueName);
+            System.out.println("[DiskDataCenter] 队列文件删除成功:" + queueName);
+        } catch (IOException e) {
+            System.out.println("[DiskDataCenter] 队列文件删除失败（文件可能不存在）:" + queueName + ", 原因:" + e.getMessage());
+        }
     }
     //查询所有队列
     public List<MessageQueue> selectAllQueue(){
@@ -69,12 +75,12 @@ public class DiskDataCenter {
     //插入绑定
     public void insertBinding(Binding binding){
         dataBaseManager.insertBinding(binding);
-        System.out.println("绑定插入成功:");
+        System.out.println("[DiskDataCenter] 绑定插入成功:");
     }
     //删除绑定
     public void deleteBinding(Binding binding){
         dataBaseManager.deleteBinding(binding);
-        System.out.println("绑定删除成功");
+        System.out.println("[DiskDataCenter] 绑定删除成功");
     }
     //查询所有绑定
     public List<Binding> selectAllBinding(){

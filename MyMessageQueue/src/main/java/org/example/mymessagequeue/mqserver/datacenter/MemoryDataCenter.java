@@ -43,13 +43,13 @@ public class MemoryDataCenter {
             return;
         }
         exchangeMap.put(exchange.getName(),exchange);
-        System.out.println("交换机"+exchange.getName()+"插入成功");
+        System.out.println("[MemoryDataCenter] 交换机"+exchange.getName()+"插入成功");
     }
 
     //“交换机”删除，目标：在哈希表中删除
     public void deleteExchange(String exchangeName){
         exchangeMap.remove(exchangeName);
-        System.out.println("交换机"+exchangeName+"删除成功");
+        System.out.println("[MemoryDataCenter] 交换机"+exchangeName+"删除成功");
     }
 
     //“交换机”查询，目标：在哈希表中查询出指定的交换机
@@ -64,13 +64,13 @@ public class MemoryDataCenter {
     public void insertQueue(MessageQueue queue){
         if(queue==null){return;}
         queueMap.put(queue.getName(),queue);
-        System.out.println("队列"+queue.getName()+"插入成功");
+        System.out.println("[MemoryDataCenter] 队列"+queue.getName()+"插入成功");
     }
 
     //“队列”删除
     public void deleteQueue(String queueName){
         queueMap.remove(queueName);
-        System.out.println("队列"+queueName+"删除成功");
+        System.out.println("[MemoryDataCenter] 队列"+queueName+"删除成功");
     }
 
     //查询指定”队列“
@@ -150,7 +150,7 @@ public class MemoryDataCenter {
         stringBindingConcurrentHashMap.remove(binding.getMessageQueueName());
 //        bindingMap.remove(binding.getExchangeName(),stringBindingConcurrentHashMap);
         System.out.println("[MemoryDataCenter] 绑定已删除 exchangeName:"+binding.getExchangeName()
-                +",queueName:"+binding.getExchangeName());
+                +",queueName:"+binding.getMessageQueueName());
     }
 
     /**

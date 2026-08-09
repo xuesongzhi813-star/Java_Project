@@ -20,9 +20,33 @@ public class ConsumerManager {
     //扫描线程
     private Thread scannerThread=null;
 
+
     public ConsumerManager(VirtualHost p){
         this.virtualHost=p;
+        scannerThread=new Thread(()->{
+            while (true){
+                try {
+                    //拿到“令牌”，即队列名
+                    String queueName = tokenQueue.take();
+                    //查找队列存在
+                    MessageQueue queue = virtualHost.getMemoryDataCenter().getQueue(queueName);
+                    if(queue==null){
+                        throw new mqException("[ConsumerManager] 队列不存在！"+queueName);
+                    }
+                    //存在则消费消息
+                    synchronized (queue) {
+                        cosumeMessage(queue);
+                    }
+                }catch (Exception e){
+                    e.printStackTrace();
+                }
+            }
+        });
+        //设置线程
+        scannerThread.setDaemon(true);
+        scannerThread.start();
     }
+
 
     //1.通知消费
     public void notifyConsumer(String queueName) throws InterruptedException {
@@ -50,5 +74,42 @@ public class ConsumerManager {
     }
 
     private void cosumeMessage(MessageQueue queue) {
+        //选定一个消费者
+        ConsumerEnv consumerEnv = queue.chooseConsumerEnv();
+        //若此时没有消费者，则返回等待消费者
+        if(consumerEnv==null){
+            return;
+        }
+        //取出消息，进行消费
+        Message message = virtualHost.getMemoryDataCenter().pollMessage(queue);
+        if(message==null){
+            return;
+        }
+        //消息提交给线程池执行
+        executorService.submit(()->{
+            try {
+                //消息进入待确认队列
+                virtualHost.getMemoryDataCenter().addUnAckMessage(queue.getName(),message);
+                //调用“回调函数”执行处理消息的逻辑
+                consumerEnv.getConsumer().deliverMessage(consumerEnv.getConsumerTag(), message.getProperties(), message.getBody());
+                if(consumerEnv.isAutoAck()){
+                    //若是自动应答，则进行删除
+                    if(message.getDurable()){
+                        //持久化，则在硬盘上删除
+                        virtualHost.getDiskDataCenter().deleteMessage(queue,message);
+                    }
+                    //在未确认集合中删除
+                    virtualHost.getMemoryDataCenter().deleteUnAcMessage(queue.getName(), message.getId());
+                    //从消息集合中删除
+                    virtualHost.getMemoryDataCenter().deleteById(message.getId());
+                }
+                else {
+                    //若是手动应答，调用basicAck
+                    virtualHost.basicAck(queue.getName(), message.getId());
+                }
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+        });
     }
 }

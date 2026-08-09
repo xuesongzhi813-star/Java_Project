@@ -26,19 +26,18 @@ public class DataBaseManager {
     public void init(){
         //注入实现SQL语句的对象
         metaMapper= MyMessageQueueApplication.context.getBean(MetaMapper.class);
-        //判断是否已经创建过数据库
-        File file=new File("./data/meta.db");
-        if(file.exists()){
-            //不再进行创建
-            System.out.println("[dataBaseManager]：数据表已经存在");
-            return;
+        //确保数据目录存在（SQLite JDBC 驱动连接时会自动创建，但此处显式保证）
+        File dataDir = new File("./data");
+        if (!dataDir.exists()) {
+            dataDir.mkdirs();
         }
-        else {
-            //创建表
-            createTable();
-            System.out.println("[dataBaseManager]：创建数据表成功");
-            //插入默认数据
-            Exchange exchange=createDefault();
+        // 始终执行建表（SQL 使用 IF NOT EXISTS，已存在的表不会重复创建）
+        createTable();
+        System.out.println("[dataBaseManager]：数据表初始化完成");
+        //只有首次初始化时才插入默认交换机（检查交换机表是否为空）
+        List<Exchange> exchanges = metaMapper.selectAllExchange();
+        if (exchanges == null || exchanges.isEmpty()) {
+            Exchange exchange = createDefault();
             insertDefault(exchange);
             System.out.println("[dataBaseManager]：插入匿名交换机成功");
         }

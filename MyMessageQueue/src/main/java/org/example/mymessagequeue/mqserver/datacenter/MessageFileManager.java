@@ -82,29 +82,38 @@ public class MessageFileManager {
      * 创建队列对应文件和目录
      */
     public void createMkdir(String queueName) throws IOException {
-        //先创建队列的目录
+        //先创建队列的目录（mkdirs 确保父目录一并创建）
         File file = new File(findQueueDirPath(queueName));
-        if (file.exists()) {
-            System.out.println("[MessageFileMannager]：当前队列目录已存在！");
-        } else {
-            file.mkdir();
+        if (!file.exists()) {
+            boolean ok = file.mkdirs();
+            if (!ok) {
+                throw new IOException("无法创建队列目录: " + file.getAbsolutePath());
+            }
             System.out.println("[MessageFileManager]：队列目录创建成功");
+        } else {
+            System.out.println("[MessageFileManager]：当前队列目录已存在！");
         }
         //创建队列的数据文件
         file = new File(findQueueDataPath(queueName));
-        if (file.exists()) {
-            System.out.println("[MessageFileMannager]：当前数据文件已存在！");
-        } else {
-            file.createNewFile();
+        if (!file.exists()) {
+            boolean ok = file.createNewFile();
+            if (!ok) {
+                throw new IOException("无法创建数据文件: " + file.getAbsolutePath());
+            }
             System.out.println("[MessageFileManager]：数据文件创建成功");
+        } else {
+            System.out.println("[MessageFileManager]：当前数据文件已存在！");
         }
         //创建队列的统计文件
         file = new File(findQueueStatPath(queueName));
-        if (file.exists()) {
-            System.out.println("[MessageFileMannager]：统计文件已存在！");
-        } else {
-            file.createNewFile();
+        if (!file.exists()) {
+            boolean ok = file.createNewFile();
+            if (!ok) {
+                throw new IOException("无法创建统计文件: " + file.getAbsolutePath());
+            }
             System.out.println("[MessageFileManager]：统计文件创建成功");
+        } else {
+            System.out.println("[MessageFileManager]：统计文件已存在！");
         }
         //统计文件初始化
         Stat stat = new Stat();
@@ -117,26 +126,29 @@ public class MessageFileManager {
      * 删除队列目录和附属文件
      */
     public void deleteMkdirAndFile(String queueName) throws IOException {
-        //删除数据文件
+        //删除数据文件（文件不存在时跳过，不抛异常）
         File file = new File(findQueueDataPath(queueName));
         if (file.exists()) {
-            file.delete();
-        } else {
-            throw new IOException("不存在这个文件");
+            boolean ok = file.delete();
+            if (!ok) {
+                throw new IOException("无法删除数据文件: " + file.getAbsolutePath());
+            }
         }
         //删除统计文件
         file = new File(findQueueStatPath(queueName));
         if (file.exists()) {
-            file.delete();
-        } else {
-            throw new IOException("不存在这个文件");
+            boolean ok = file.delete();
+            if (!ok) {
+                throw new IOException("无法删除统计文件: " + file.getAbsolutePath());
+            }
         }
         //删除目录
         file = new File(findQueueDirPath(queueName));
         if (file.exists()) {
-            file.delete();
-        } else {
-            throw new IOException("不存在这个目录");
+            boolean ok = file.delete();
+            if (!ok) {
+                throw new IOException("无法删除队列目录: " + file.getAbsolutePath());
+            }
         }
     }
 
@@ -188,8 +200,8 @@ public class MessageFileManager {
                     dataOutputStream.write(aByte);
                 }
             }
-            //更新统计文件
-            Stat stat = new Stat();
+            //更新统计文件（先读取现有值再累加，避免覆盖）
+            Stat stat = readStat(queue.getName());
             stat.total += 1;
             stat.effect += 1;
             writeStat(queue.getName(), stat);
@@ -218,8 +230,8 @@ public class MessageFileManager {
                 randomAccessFile.seek(message.getOffsetBegin());
                 randomAccessFile.write(bytes);
             }
-            //更新统计文件，有效文件数-1
-            Stat stat = new Stat();
+            //更新统计文件，有效文件数-1（先读取现有值再递减）
+            Stat stat = readStat(queue.getName());
             stat.effect -= 1;
             writeStat(queue.getName(), stat);
         }
