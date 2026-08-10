@@ -14,7 +14,7 @@ public class BinaryTool {
      * @param message
      * @return
      */
-    public static byte[] toByte(Message message) throws IOException {
+    public static byte[] toByte(Object message) throws IOException {
         //先创建一个变长字节数组的流
         try(ByteArrayOutputStream byteArrayOutputStream=new ByteArrayOutputStream()){
             try(ObjectOutputStream outputStream=new ObjectOutputStream(byteArrayOutputStream)) {
