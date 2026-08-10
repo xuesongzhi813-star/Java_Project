@@ -272,7 +272,8 @@ public class VirtualHost {
                         String queueName = virtualHostName + routingKey;
                         MessageQueue queue = memoryDataCenter.getQueue(queueName);
                         //此时routingKey就是要发送的队列名，直接发送
-                        memoryDataCenter.sendMessage(queue, message);
+                        //注意：必须走统一的sendMessage方法（落盘+设置offset+通知消费），不能直接进内存
+                        sendMessage(queue, message);
                     } else {
                         //判断是剩下哪种类型
                         if (exchange.getExchageType() == exchangetype.FANOUT) {
