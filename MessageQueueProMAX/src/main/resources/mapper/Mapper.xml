@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.messagequeuepromax.mqserver.mapper.DiskMapper">
+<!--创建交换机数据库的SQL语句-->
+    <update id="createExchangeTable">
+        create table if not exists Exchange(
+        name varchar(50) primary key,
+        exchangeType int,
+        durable boolean,
+        autoDelete boolean,
+        arguments varchar(50)
+        );
+    </update>
+
+    <update id="createQueueTable">
+        create table if not exists Queue(
+        name varchar(50) primary key,
+        exclusive boolean,
+        durable boolean,
+        autoDelete boolean,
+        arguments varchar(50)
+        );
+    </update>
+
+    <update id="createBindingTable">
+        create table if not exists Binding(
+        exchangeName varchar(50),
+        queueName varchar(50),
+        bindingKey varchar(50)
+        );
+    </update>
+
+    <update id="createUserTable">
+        create table if not exists UserInfo(
+        userName varchar(50) primary key,
+        password varchar(50)
+        );
+    </update>
+
+<!--关于插入和删除的SQL语句-->
+    <insert id="insertExchange" parameterType="org.example.messagequeuepromax.mqserver.core.Exchange">
+        insert into Exchange values(#{name},#{exchangeType},#{durable},#{autoDelete},#{arguments});
+    </insert>
+
+    <insert id="insertMessageQueue" parameterType="org.example.messagequeuepromax.mqserver.core.MessageQueue">
+        insert into Queue values(#{name},#{durable},#{exclusive},#{autoDelete},#{arguments});
+    </insert>
+
+    <insert id="insertBinding" parameterType="org.example.messagequeuepromax.mqserver.core.Binding">
+        insert into Binding values(#{exchangeName},#{queueName},#{bindingKey});
+    </insert>
+
+    <insert id="insertUserInfo" parameterType="org.example.messagequeuepromax.mqserver.core.UserInfo">
+        insert into UserInfo values(#{userName},#{password});
+    </insert>
+
+    <delete id="deleteExchange" parameterType="string">
+        delete from Exchange where name=#{name};
+    </delete>
+
+    <delete id="deleteMessageQueue" parameterType="string">
+        delete from Queue where name=#{name};
+    </delete>
+
+    <delete id="deleteBinding" parameterType="org.example.messagequeuepromax.mqserver.core.Binding">
+        delete from Binding where exchangeName=#{exchangeName} and queueName=#{queueName};
+    </delete>
+
+    <delete id="deleteUserInfo" parameterType="string">
+        delete from UserInfo where userName=#{userName};
+    </delete>
+
+    <!--    resultType：填返回参数类型-->
+    <select id="selectAllExchange" resultType="org.example.messagequeuepromax.mqserver.core.Exchange">
+        select * from Exchange;
+    </select>
+
+    <select id="selectAllQueue" resultType="org.example.messagequeuepromax.mqserver.core.MessageQueue">
+        select * from Queue;
+    </select>
+
+    <select id="selectAllBinding" resultType="org.example.messagequeuepromax.mqserver.core.Binding">
+        select * from Binding;
+    </select>
+
+    <select id="selectAllUser" resultType="org.example.messagequeuepromax.mqserver.core.UserInfo">
+        select * from UserInfo;
+    </select>
+</mapper>
