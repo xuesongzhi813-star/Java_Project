@@ -26,7 +26,7 @@ public class Message implements Serializable {
      *body+basicproperties（采取“覆盖”操作），routingKey是决定消息发给哪个队列的关键。也需要覆盖设置
      * 注意！！属性类+routingKey不能为空，因为routingKey是传输标记+routingKey依赖于属性类存在，属性类就不能空
      */
-    public Message messageFactory(byte[] body,BasicProperties basicProperties,String routingKey){
+    public static Message messageFactory(byte[] body,BasicProperties basicProperties,String routingKey){
         Message message=new Message();
         if(basicProperties!=null){
             //若属性类不为空，直接覆盖原属性
