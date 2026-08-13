@@ -4,7 +4,9 @@ import org.example.messagequeuepromax.common.exchangeType;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class Exchange {
@@ -23,6 +25,12 @@ public class Exchange {
 
     //交换机的“额外属性”
     private Map<String,Object> arguments=new HashMap<>();
+
+    //交换机的连接“绑定数”，如果为0，且添加绑定开关=false，则触发自动删除
+    private List<Binding> bindingList=new ArrayList<>();
+
+    //交换机的添加绑定开关
+    private boolean isdeleting=false;
 
     public String getName() {
         return name;
