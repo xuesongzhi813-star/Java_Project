@@ -4,10 +4,7 @@ import org.example.messagequeuepromax.common.mqException;
 import org.example.messagequeuepromax.mqserver.core.*;
 
 import java.io.IOException;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -153,6 +150,31 @@ public class MemoryDataCenter {
         }
     }
 
+    //获取交换机下的所有“与队列的绑定”的集合
+    public ConcurrentHashMap<String,Binding> getExchangeBinding(String exchangeName){
+        ConcurrentHashMap<String,Binding> map=bindingMap.get(exchangeName);
+        if(map==null){
+            System.out.println("[MemoryDataCenter] 要查询的绑定不存在:exchangeName:" + exchangeName);
+            return null;
+        }
+        return map;
+    }
+
+    //获取该队列的所有绑定集合
+    public List<Binding> getQueueBinding(String queueName){
+        List<Binding> bindingList=new ArrayList<>();
+        //获取外层键值对的“值”-->获得内层的哈希表
+        for(Map.Entry<String,ConcurrentHashMap<String,Binding>> entry:bindingMap.entrySet()){
+            ConcurrentHashMap<String, Binding> value = entry.getValue();
+            if(value.containsKey(queueName)){
+                Binding binding = value.get(queueName);
+                //虽然说一个队列和一个交换机只会有一个绑定
+                //可能该队列，不止绑定了一个交换机
+                bindingList.add(binding);
+            }
+        }
+        return bindingList;
+    }
     /**
      * 用户的增，删，查
      */

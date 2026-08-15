@@ -85,30 +85,30 @@ public class Message implements Serializable {
      * 构造能取到消息属性的get/set方法（通过basicProperties太麻烦）
      */
     public String getMessageId(){
-        return this.basicProperties.getMessageId();
+        return basicProperties.getMessageId();
     }
 
     public boolean getDurable(){
-        return this.basicProperties.isDurable();
+        return basicProperties.isDurable();
     }
 
     public String getroutingKey(){
-        return this.basicProperties.getRoutingKey();
+        return basicProperties.getRoutingKey();
     }
 
     public long getTime(){
-        return this.basicProperties.getCurrentTime();
+        return basicProperties.getCurrentTime();
     }
 
     public void setMessageId(String messageId){
-        this.basicProperties.setMessageId(messageId);
+        basicProperties.setMessageId(messageId);
     }
 
     public void setdurable(boolean durable){
-        this.basicProperties.setDurable(durable);
+        basicProperties.setDurable(durable);
     }
 
     public void setRoutingKey(String routingKey){
-        this.basicProperties.setRoutingKey(routingKey);
+        basicProperties.setRoutingKey(routingKey);
     }
 }
