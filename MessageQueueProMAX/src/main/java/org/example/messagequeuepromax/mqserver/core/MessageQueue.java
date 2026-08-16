@@ -1,10 +1,12 @@
 package org.example.messagequeuepromax.mqserver.core;
 
+import org.example.messagequeuepromax.common.ConsumerEnv;
+import org.example.messagequeuepromax.common.mqException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MessageQueue {
     //通过队列名字来标识唯一的队列
@@ -21,6 +23,13 @@ public class MessageQueue {
 
     //额外属性配置
     private Map<String,Object> arguments=new HashMap<>();
+
+    //管理订阅本队列的消费者集合
+    List<ConsumerEnv> consumerEnvList=new ArrayList<>();
+
+    //订阅本队列的消费者，轮流来取消息消费
+    //轮流下标
+    private AtomicInteger consumerIndex=new AtomicInteger(0);
 
     public String getName() {
         return name;
@@ -84,5 +93,43 @@ public class MessageQueue {
 
     public void setArguments(Map<String,Object> arguments) {
         this.arguments=arguments;
+    }
+
+    //添加订阅的消费者
+    public void addConsumerEnv(ConsumerEnv consumerEnv){
+        //检查消费者是否有效
+        if(consumerEnv==null){
+            System.out.println("[MessageQueue] 该消费者无效，无法添加");
+            return;
+        }
+        consumerEnvList.add(consumerEnv);
+        System.out.println("[MessageQueue] 消费者订阅添加成功:consumerTag:"+consumerEnv.getConsumerTag());
+    }
+
+    //删除订阅的消费者
+    public void deleteConsumerEnv(ConsumerEnv consumerEnv) throws mqException {
+        //查找是否存在订阅
+        if(!consumerEnvList.contains(consumerEnv)){
+            throw new mqException("[MessageQueue] 该消费者订阅不存在");
+        }
+        //进行删除
+        consumerEnvList.remove(consumerEnv);
+        System.out.println("[MessageQueue] 消费者订阅删除成功:consumerTag:"+consumerEnv.getConsumerTag());
+    }
+
+    //挑选消费者轮流进行消费消息
+    public ConsumerEnv selectConsumer(){
+        //先进行查询，订阅集合中有无对象
+        if(consumerEnvList.size()==0){
+            System.out.println("[MessageQueue] 订阅集合中没有消费者");
+            return null;
+        }
+        //计算取定下标
+        int index=consumerIndex.get()%consumerEnvList.size();
+        //根据下标获取到本次消费的消费者
+        ConsumerEnv consumerEnv = consumerEnvList.get(index);
+        //下标自增
+        consumerIndex.getAndIncrement();
+        return consumerEnv;
     }
 }

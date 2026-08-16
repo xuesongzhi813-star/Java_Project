@@ -1,5 +1,7 @@
 package org.example.messagequeuepromax.mqserver;
 
+import org.example.messagequeuepromax.common.Consumer;
+import org.example.messagequeuepromax.common.ConsumerEnv;
 import org.example.messagequeuepromax.common.exchangeType;
 import org.example.messagequeuepromax.common.mqException;
 import org.example.messagequeuepromax.mqserver.core.*;
@@ -296,8 +298,7 @@ public class VirtualHost {
                         Message message = Message.messageFactory(body, basicProperties, routingKey);
                         //查询队列，并且直接发送
                         MessageQueue queue = memoryDataCenter.selectQueue(routingKey);
-                        memoryDataCenter.sendMessage(queue,message);
-                        diskDataCenter.writeMessage(queue,message);
+                        sendMessage(queue,message);
                         System.out.println("[VirtualHost] DIRECT类型交换机发送消息成功:exchangeName:"+exchangeName
                         +",routingKey:"+routingKey);
                         return true;
@@ -315,10 +316,7 @@ public class VirtualHost {
                                     System.out.println("[VirtualHost] 对于FANOUT交换机，该队列不存在，无法发送消息");
                                     continue;
                                 }
-                                memoryDataCenter.sendMessage(queue,message);
-                                if(message.getDurable()) {
-                                    diskDataCenter.writeMessage(queue, message);
-                                }
+                                sendMessage(queue,message);
                                 System.out.println("[VirtualHost] FANOUT类型交换机发送消息成功:exchangeName:"+exchangeName
                                         +",routingKey:"+routingKey);
                             }
@@ -345,7 +343,7 @@ public class VirtualHost {
                         }
                     }
                 }catch (Exception e){
-                    System.out.println("[VirtualHost]  消息发送失败");
+                    System.out.println("[VirtualHost]  消息发送失败"+e.getMessage());
                     return false;
                 }
             }
@@ -353,7 +351,7 @@ public class VirtualHost {
         return true;
     }
 
-    private void sendMessage(MessageQueue queue, Message message) throws mqException, IOException {
+    private void sendMessage(MessageQueue queue, Message message) throws mqException, IOException, InterruptedException {
         //TOPIC类型发送消息
         //先存内存，再存硬盘
             memoryDataCenter.sendMessage(queue,message);
@@ -362,5 +360,53 @@ public class VirtualHost {
             }
             System.out.println();
             //通知消费者消费TODO
+        //三种交换机类型都要调用本方法（sendMessage），因为发送完消息，还要即使通知消费者来消费
+        ConsumerManager consumerManager=new ConsumerManager(this);
+        consumerManager.notifyConsumer(queue.getName());
+    }
+
+    //8.订阅消息
+    //参数都是构造消费者对象的基本参数
+    public boolean basicSubscribe(MessageQueue queue,String consumerTag, boolean autoAck, Consumer consumer){
+        synchronized (queueLocker) {
+            ConsumerManager consumerManager = new ConsumerManager(this);
+            //添加到指定队列的消费者集合
+            try {
+                consumerManager.addConsumer(queue.getName(),consumerTag,autoAck,consumer);
+                System.out.println("[VirtualHost] 订阅成功,queueName:"+queue.getName()+",consumerTag:"+consumerTag);
+                return true;
+            } catch (mqException e) {
+                System.out.println("[VirtualHost] 订阅失败");
+                return false;
+            }
+        }
+    }
+
+    //9.手动应答，消息处理状态
+    public boolean basicAck(MessageQueue queue,Message message){
+        //检查队列
+        if(queue==null){
+            System.out.println("[VirtualHost] 队列为空");
+            return false;
+        }
+        //检查消息
+        if(message==null){
+            System.out.println("[VirtualHost] 消息为空");
+            return false;
+        }
+        //进行手动应答
+        //删除消息：硬盘+内存+未确认消息+消息集合
+        try {
+            memoryDataCenter.deleteMessageById(message.getMessageId());
+            memoryDataCenter.deleteUnAckMessage(queue.getName(),message.getMessageId());
+            if(message.getDurable()){
+                diskDataCenter.deleteMessage(queue,message);
+            }
+            System.out.println("[VirtualHost] 手动应答成功:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
+            return true;
+        }catch (Exception e){
+            System.out.println("[VirtualHost] 手动应答失败:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
+            return false;
+        }
     }
 }

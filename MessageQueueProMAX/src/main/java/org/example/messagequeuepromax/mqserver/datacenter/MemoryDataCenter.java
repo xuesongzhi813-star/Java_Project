@@ -260,14 +260,14 @@ public class MemoryDataCenter {
 
     //返回指定队列的“消息集合长度”
     public int getMessagesLength(String queueName) throws mqException {
+        //获取集合
         LinkedList<Message> messages=messageBelongMap.get(queueName);
         if(messages==null){
-            throw new mqException("[MemoryDataCenter] 该队列中“消息集合”不存在:queueName:"+queueName);
+            return 0;
         }
-        if(messages.size()==0){
-            System.out.println("[MemoryDataCenter] 该队列中“消息集合”中无消息:queueName:"+queueName);
+        synchronized (messages) {
+            return messages.size();
         }
-        return messages.size();
     }
 
     /**

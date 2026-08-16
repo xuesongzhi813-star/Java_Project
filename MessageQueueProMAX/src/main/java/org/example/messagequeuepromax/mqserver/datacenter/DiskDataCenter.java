@@ -17,6 +17,22 @@ public class DiskDataCenter {
     //调度“本地消息文件”持久化的对象
     private MessageFileManager messageFileManager=new MessageFileManager();
 
+    public MessageFileManager getMessageFileManager() {
+        return messageFileManager;
+    }
+
+    public void setMessageFileManager(MessageFileManager messageFileManager) {
+        this.messageFileManager = messageFileManager;
+    }
+
+    public DataBaseManager getDataBaseManager() {
+        return dataBaseManager;
+    }
+
+    public void setDataBaseManager(DataBaseManager dataBaseManager) {
+        this.dataBaseManager = dataBaseManager;
+    }
+
     //初始化硬盘，创建好目录和文件
     public void init(){
         dataBaseManager.init();
