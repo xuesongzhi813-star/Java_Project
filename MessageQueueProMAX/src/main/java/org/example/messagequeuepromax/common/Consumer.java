@@ -2,6 +2,8 @@ package org.example.messagequeuepromax.common;
 
 import org.example.messagequeuepromax.mqserver.core.BasicProperties;
 
+import java.io.IOException;
+
 //最终消费者消费消息，就是通过这个函数式接口
 @FunctionalInterface
 public interface Consumer {
@@ -12,5 +14,5 @@ public interface Consumer {
      * @param basicProperties
      * @param body
      */
-    public void deliverMessage(String consumerTag, BasicProperties basicProperties,byte[] body);
+    public void deliverMessage(String consumerTag, BasicProperties basicProperties,byte[] body) throws IOException;
 }

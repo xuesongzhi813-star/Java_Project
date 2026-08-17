@@ -71,6 +71,8 @@ public class ConsumerManager {
         ConsumerEnv consumerEnv = new ConsumerEnv();
         consumerEnv.setConsumerTag(consumerTag);
         consumerEnv.setAutoAck(autoAck);
+        //记录订阅的队列名，便于连接断开时清理死订阅
+        consumerEnv.setQueueName(queueName);
         consumerEnv.setConsumer(consumer);
         synchronized (queue) {
             //添加到对应队列的消费者集合
@@ -100,7 +102,7 @@ public class ConsumerManager {
             try {
                 //先将消息放入未确定消息队列（已经开始消费不知道结果）
                 virtualHost.getMemoryDataCenter().addUnAckMessage(queue.getName(),message);
-                //调用回调函数消费消息
+                //调用回调函数消费消息（若目标消费者连接已断开，服务器端 deliverMessage 会抛 IOException）
                 consumerEnv.getConsumer().deliverMessage(consumerEnv.getConsumerTag(), message.getBasicProperties(), message.getBody());
                 //消费完消息响应服务器，看是手动应答，还是自动应答
                 if(consumerEnv.isAutoAck()){
@@ -114,7 +116,28 @@ public class ConsumerManager {
                     //若是手动应答，调用basicAck
                     virtualHost.basicAck(queue,message);
                 }
-            } catch (mqException | IOException e) {
+            } catch (IOException e) {
+                //投递失败（消费者连接已断开）：消息不能丢，重新放回队列
+                virtualHost.getMemoryDataCenter().deleteUnAckMessage(queue.getName(), message.getMessageId());
+                try {
+                    virtualHost.getMemoryDataCenter().requeueMessage(queue, message);
+                } catch (mqException mqException) {
+                    mqException.printStackTrace();
+                }
+                //该消费者已失联，从订阅集合中移除，避免下次继续选中它
+                try {
+                    queue.deleteConsumerEnv(consumerEnv);
+                } catch (mqException mqException) {
+                    mqException.printStackTrace();
+                }
+                System.out.println("[ConsumerManager] 消息投递失败，已重新入队:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
+                //重新通知消费，让消息尽快被活着的消费者消费掉
+                try {
+                    this.notifyConsumer(queue.getName());
+                } catch (InterruptedException interruptedException) {
+                    interruptedException.printStackTrace();
+                }
+            } catch (mqException e) {
                 e.printStackTrace();
             }
         });

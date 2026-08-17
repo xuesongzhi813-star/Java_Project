@@ -44,10 +44,16 @@ public class DataBaseManager {
         }
         //存在则进行数据库的创建
         createDataBase();
-        //插入默认交换机
+        //插入默认交换机（若已存在则跳过，避免二次启动时 name 主键冲突）
         Exchange exchange=createDefault();
-        insertExchange(exchange);
-        System.out.println("[DataBaseManager] 默认交换机插入成功");
+        List<Exchange> exchanges = diskMapper.selectAllExchange();
+        boolean exists = exchanges != null && exchanges.stream().anyMatch(e -> exchange.getName().equals(e.getName()));
+        if (!exists) {
+            insertExchange(exchange);
+            System.out.println("[DataBaseManager] 默认交换机插入成功");
+        } else {
+            System.out.println("[DataBaseManager] 默认交换机已存在，跳过插入");
+        }
         System.out.println("[DataBaseManager] 数据库初始化完成");
     }
 

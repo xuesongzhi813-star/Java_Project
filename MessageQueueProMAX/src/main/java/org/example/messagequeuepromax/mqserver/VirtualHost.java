@@ -141,8 +141,9 @@ public class VirtualHost {
     public boolean queueDeclare(String name,boolean exclusive,boolean durable,boolean autoDelete,Map<String,Object> arguments){
         //先加上归属虚拟主机的标识
         String queueName=virtualHostName+name;
-        //判断要创建的队列是否存在
-        if(memoryDataCenter.getExchangeBinding(queueName)!=null){
+        //判断要创建的队列是否存在（必须查队列表 selectQueue，而不是绑定表 getExchangeBinding，
+        //否则已存在的队列会被重复 new 出来覆盖，导致已注册的消费者全部丢失）
+        if(memoryDataCenter.selectQueue(queueName)!=null){
             //存在则无需再创建
             System.out.println("[VirtualHost] 队列已经存在，queueName:"+queueName);
             return true;
@@ -249,25 +250,29 @@ public class VirtualHost {
 
     //6.销毁绑定
     public boolean bindingDelete(Binding binding) throws mqException {
+        String exchangeName=virtualHostName+binding.getExchangeName();
+        String queueName=virtualHostName+binding.getQueueName();
         //判断绑定是否存在
-        Binding orderBinding=memoryDataCenter.getUniqueBinding(binding.getExchangeName(), binding.getQueueName());
+        Binding orderBinding=memoryDataCenter.getUniqueBinding(exchangeName, queueName);
         if(orderBinding==null){
-            throw new mqException("[VirtualHost] 该绑定不存在:exchangeName:"+binding.getExchangeName()
-            +",queueName:"+binding.getQueueName()+",bindingKey:"+binding.getBindingKey());
+            throw new mqException("[VirtualHost] 该绑定不存在:exchangeName:"+exchangeName
+            +",queueName:"+queueName+",bindingKey:"+binding.getBindingKey());
         }
         //如果交换机/队列先被删除了，会先解绑删除，因此这里不会出现交换机/队列为空删除失败的原因
         //直接进行删除
         synchronized (exchangeLocker){
             synchronized (queueLocker){
                 try{
+                    binding.setExchangeName(exchangeName);
+                    binding.setQueueName(queueName);
                     memoryDataCenter.deleteBinding(binding);
                     diskDataCenter.deleteBinding(binding);
-                    System.out.println("[VirtualHost] 绑定删除成功:exchangeName:"+binding.getExchangeName()
-                            +",queueName:"+binding.getQueueName()+",bindingKey:"+binding.getBindingKey());
+                    System.out.println("[VirtualHost] 绑定删除成功:exchangeName:"+exchangeName
+                            +",queueName:"+queueName+",bindingKey:"+binding.getBindingKey());
                     return true;
                 }catch (Exception e){
-                    System.out.println("[VirtualHost] 该绑定删除失败:exchangeName:"+binding.getExchangeName()
-                            +",queueName:"+binding.getQueueName()+",bindingKey:"+binding.getBindingKey());;
+                    System.out.println("[VirtualHost] 该绑定删除失败:exchangeName:"+exchangeName
+                            +",queueName:"+queueName+",bindingKey:"+binding.getBindingKey());;
                     return false;
                 }
             }

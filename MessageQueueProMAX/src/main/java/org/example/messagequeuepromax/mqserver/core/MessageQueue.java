@@ -5,10 +5,11 @@ import org.example.messagequeuepromax.common.mqException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.Serializable;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class MessageQueue {
+public class MessageQueue implements Serializable {
     //通过队列名字来标识唯一的队列
     private String name;
 
@@ -115,6 +116,22 @@ public class MessageQueue {
         //进行删除
         consumerEnvList.remove(consumerEnv);
         System.out.println("[MessageQueue] 消费者订阅删除成功:consumerTag:"+consumerEnv.getConsumerTag());
+    }
+
+    //根据 consumerTag（即channelId）移除订阅的消费者：消费者连接断开时清理"死订阅"用
+    public boolean deleteConsumerEnvByTag(String consumerTag){
+        synchronized (this) {
+            Iterator<ConsumerEnv> iterator = consumerEnvList.iterator();
+            while (iterator.hasNext()) {
+                ConsumerEnv consumerEnv = iterator.next();
+                if (consumerTag!=null && consumerTag.equals(consumerEnv.getConsumerTag())) {
+                    iterator.remove();
+                    System.out.println("[MessageQueue] 消费者订阅清理成功(连接断开):consumerTag:"+consumerTag);
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     //挑选消费者轮流进行消费消息

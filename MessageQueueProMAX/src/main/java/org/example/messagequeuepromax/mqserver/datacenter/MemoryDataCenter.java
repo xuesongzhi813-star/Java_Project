@@ -77,6 +77,16 @@ public class MemoryDataCenter {
     public MessageQueue selectQueue(String queueName){
         return queueMap.get(queueName);
     }
+    //根据 consumerTag（即channelId）移除消费者订阅：消费者连接断开时清理"死订阅"
+    public void removeConsumerByTag(String consumerTag){
+        if(consumerTag==null){
+            return;
+        }
+        for(Map.Entry<String,MessageQueue> entry:queueMap.entrySet()){
+            MessageQueue queue=entry.getValue();
+            queue.deleteConsumerEnvByTag(consumerTag);
+        }
+    }
 
     /**
      * 绑定在内存上的增，删，查
@@ -241,6 +251,8 @@ public class MemoryDataCenter {
                 throw new mqException("[MemoryDataCenter] 要发送的消息对象为空");
             }
             messages.add(message);
+            //消息同时登记到 messageMap，否则消费/应答时 deleteMessageById 会因找不到消息而抛"该消息不存在"
+            messageMap.put(message.getMessageId(), message);
             System.out.println("[MemoryDataCenter] 发送消息成功:queueName:" + queue.getName()
                     + ",messageId:" + message.getMessageId());
         }
@@ -255,6 +267,22 @@ public class MemoryDataCenter {
             }
             //取出一个消息，头删，先进先出
             return messages.poll();
+        }
+    }
+
+    //投递失败后，把消息重新放回队列：pollMessage 只是从队列集合移除，消息仍在 messageMap，无需重复登记
+    public void requeueMessage(MessageQueue queue, Message message) throws mqException {
+        synchronized (queue) {
+            if(queue==null){
+                throw new mqException("[MemoryDataCenter] 要重新入队的队列为空");
+            }
+            if(message==null){
+                throw new mqException("[MemoryDataCenter] 要重新入队的消息为空");
+            }
+            LinkedList<Message> messages = messageBelongMap.computeIfAbsent(queue.getName(), k -> new LinkedList<>());
+            //放回队头，尽量保持原有顺序
+            messages.addFirst(message);
+            System.out.println("[MemoryDataCenter] 消息重新入队成功:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
         }
     }
 
