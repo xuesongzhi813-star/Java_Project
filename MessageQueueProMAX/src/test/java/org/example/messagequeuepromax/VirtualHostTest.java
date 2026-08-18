@@ -116,7 +116,7 @@ public class VirtualHostTest {
         ok=virtualHost.basicPublish("testExchange","defaultqueueTest",new BasicProperties(),"hello".getBytes());
         Assertions.assertTrue(ok);
         Thread.sleep(500);
-        ok=virtualHost.basicSubscribe(queue, "testConsumerTag", true, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest", "testConsumerTag", true,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);
@@ -135,7 +135,7 @@ public class VirtualHostTest {
         Assertions.assertTrue(ok);
         MessageQueue queue = virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest");
         //先发消息，再订阅
-        ok=virtualHost.basicSubscribe(queue, "testConsumerTag", true, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest", "testConsumerTag", true,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);
@@ -174,7 +174,7 @@ public class VirtualHostTest {
         //两个订阅
         MessageQueue queue1=virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest1");
         MessageQueue queue2=virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest2");
-        ok=virtualHost.basicSubscribe(queue1, "testConsumerTag", true, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest1", "testConsumerTag", true,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);
@@ -182,7 +182,7 @@ public class VirtualHostTest {
             }
         });
         Assertions.assertTrue(ok);
-        ok=virtualHost.basicSubscribe(queue2, "testConsumerTag", true, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest2", "testConsumerTag", true,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);
@@ -213,7 +213,7 @@ public class VirtualHostTest {
         //两个订阅
         MessageQueue queue1=virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest1");
         MessageQueue queue2=virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest2");
-        ok=virtualHost.basicSubscribe(queue1, "testConsumerTag", true, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest1", "testConsumerTag", true,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);
@@ -221,7 +221,7 @@ public class VirtualHostTest {
             }
         });
         Assertions.assertTrue(ok);
-        ok=virtualHost.basicSubscribe(queue2, "testConsumerTag", true, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest2", "testConsumerTag", true,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);
@@ -249,7 +249,7 @@ public class VirtualHostTest {
         Assertions.assertTrue(ok);
         MessageQueue queue=virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest");
 //订阅
-        boolean basicConsume = virtualHost.basicSubscribe(queue,"consunmerTagTest", true, new Consumer() {
+        boolean basicConsume = virtualHost.basicSubscribe("queueTest","consunmerTagTest", true,new Consumer() {
             @Override
             public void deliverMessage(String conseumerTag, BasicProperties basicProperties, byte[] bytes) {
                 try {
@@ -274,7 +274,7 @@ public class VirtualHostTest {
         Assertions.assertTrue(ok);
         //订阅
         MessageQueue queue=virtualHost.getMemoryDataCenter().selectQueue("defaultqueueTest");
-        boolean basicConsume = virtualHost.basicSubscribe(queue,"consunmerTagTest", true, new Consumer() {
+        boolean basicConsume = virtualHost.basicSubscribe("queueTest","consunmerTagTest", true,new Consumer() {
             @Override
             public void deliverMessage(String conseumerTag, BasicProperties basicProperties, byte[] bytes) {
                 try {
@@ -306,7 +306,7 @@ public class VirtualHostTest {
         ok=virtualHost.basicPublish("testExchange","defaultqueueTest",new BasicProperties(),"hello".getBytes());
         Assertions.assertTrue(ok);
         Thread.sleep(500);
-        ok=virtualHost.basicSubscribe(queue, "testConsumerTag", false, new Consumer() {
+        ok=virtualHost.basicSubscribe("queueTest", "testConsumerTag", false,new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) {
                 Assertions.assertEquals("testConsumerTag",consumerTag);

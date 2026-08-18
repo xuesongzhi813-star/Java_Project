@@ -64,6 +64,13 @@ public class MessageQueue implements Serializable {
         this.autoDelete = autoDelete;
     }
 
+    public List<ConsumerEnv> getConsumerEnvList() {
+        return consumerEnvList;
+    }
+
+    public void setConsumerEnvList(List<ConsumerEnv> consumerEnvList) {
+        this.consumerEnvList = consumerEnvList;
+    }
 
     //从数据库中取出JSON，要转为哈希表才能set属性
     public void setArguments(String argument){

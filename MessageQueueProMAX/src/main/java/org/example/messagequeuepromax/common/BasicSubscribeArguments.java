@@ -5,17 +5,18 @@ import org.example.messagequeuepromax.mqserver.core.MessageQueue;
 import java.io.Serializable;
 
 public class BasicSubscribeArguments extends BasicArguments implements Serializable {
-    private MessageQueue queue;
+    private String queueName;
     private String consumerTag;
     private boolean autoAck;
     //回调函数无法实现为参数
 
-    public MessageQueue getQueue() {
-        return queue;
+
+    public String getQueueName() {
+        return queueName;
     }
 
-    public void setQueue(MessageQueue queue) {
-        this.queue = queue;
+    public void setQueueName(String queueName) {
+        this.queueName = queueName;
     }
 
     public String getConsumerTag() {

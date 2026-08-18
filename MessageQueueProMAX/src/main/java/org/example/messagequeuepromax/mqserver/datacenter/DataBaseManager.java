@@ -1,6 +1,7 @@
 package org.example.messagequeuepromax.mqserver.datacenter;
 
 import org.example.messagequeuepromax.MessageQueueProMaxApplication;
+import org.example.messagequeuepromax.common.Md5Utils;
 import org.example.messagequeuepromax.common.exchangeType;
 import org.example.messagequeuepromax.mqserver.core.Binding;
 import org.example.messagequeuepromax.mqserver.core.Exchange;
@@ -53,6 +54,19 @@ public class DataBaseManager {
             System.out.println("[DataBaseManager] 默认交换机插入成功");
         } else {
             System.out.println("[DataBaseManager] 默认交换机已存在，跳过插入");
+        }
+        //插入默认账户guest/guest（若已存在则跳过），保证服务器开箱即用：客户端不设凭证时默认用guest登录
+        //密码必须与注册/登录同一套Md5Utils加密后入库，否则与登录时的verify对不上
+        List<UserInfo> users = diskMapper.selectAllUser();
+        boolean userExists = users != null && users.stream().anyMatch(u -> "guest".equals(u.getUserName()));
+        if (!userExists) {
+            UserInfo guest = new UserInfo();
+            guest.setUserName("guest");
+            guest.setPassword(Md5Utils.encrytion("guest"));
+            insertUser(guest);
+            System.out.println("[DataBaseManager] 默认账户guest插入成功");
+        } else {
+            System.out.println("[DataBaseManager] 默认账户guest已存在，跳过插入");
         }
         System.out.println("[DataBaseManager] 数据库初始化完成");
     }

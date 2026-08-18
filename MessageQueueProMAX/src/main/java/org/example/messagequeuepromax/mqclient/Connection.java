@@ -24,7 +24,13 @@ public class Connection {
     private OutputStream outputStream;
     private DataInputStream dataInputStream;
     private DataOutputStream dataOutputStream;
-    public Connection(String host,int port) throws IOException {
+    //用户的信息
+    private String userName;
+    private String password;
+
+    public Connection(String host,int port,String userName,String password) throws IOException {
+        this.userName=userName;
+        this.password=password;
         socket=new Socket(host,port);
         inputStream=socket.getInputStream();
         outputStream=socket.getOutputStream();
@@ -58,7 +64,8 @@ public class Connection {
             //根据channelId，调用channel的回调函数处理该消息
             Channel channel = channelMap.get(subScribeReturns.getChannelId());
             if(channel==null){
-                throw new mqException("[Connection] 消息对应的channel并不存在:"+channel.getChannelId());
+                //注：channel为null时不能调channel.getChannelId()（会空指针），日志要从报文里取channelId
+                throw new mqException("[Connection] 消息对应的channel并不存在:"+subScribeReturns.getChannelId());
             }
             callback.submit(()->{
                 try {
@@ -72,10 +79,17 @@ public class Connection {
             //当前响应需要处理
             //先解析
             BasicReturns basicReturns= (BasicReturns) BinaryTool.toObject(response.getPayload());
+            //0xd=未登录拒绝响应：payload同样是BasicReturns(ok=false)，照常按rid配对唤醒等待线程
+            //但必须与普通业务失败区分开：明确打日志提示是认证问题，而不是让调用方误以为是业务返回false
+            if(response.getType()==0xd){
+                System.out.println("[Connection] 业务请求被服务器拒绝(channel未登录或登录已失效):channelId:"
+                        +basicReturns.getChannelId()+",rid:"+basicReturns.getRid());
+            }
             //根据channelId，找到该响应对应的channel
             Channel channel=channelMap.get(basicReturns.getChannelId());
             if(channel==null){
-                throw new mqException("[Connection] 该响应对应的channel并不存在:"+channel.getChannelId());
+                //注：channel为null时不能调channel.getChannelId()（会空指针），日志要从报文里取channelId
+                throw new mqException("[Connection] 该响应对应的channel并不存在:"+basicReturns.getChannelId());
             }
             channel.putReturns(basicReturns);
         }
@@ -102,8 +116,11 @@ public class Connection {
         return response;
     }
 
-    //3.创建channel
-    public Channel createChannel(){
+    //3.创建channel（不登录版本）：仅告知服务器创建channel，不做认证
+    //用途：“先注册后登录”场景——数据库没有该用户信息时，必须先拿到channel才能发注册请求，
+    //     而带参版本登录失败会回滚不返回channel，形成“无法注册”的死循环，故提供此解耦入口
+    //安全：未认证channel的业务请求会被服务器拦截门(type=0xd)拒绝，除login/register/closeChannel外什么都做不了
+    public Channel createChannel() throws IOException, mqException {
         Channel channel=new Channel("Ch-"+ UUID.randomUUID().toString(),this);
         //放入表中
         channelMap.put(channel.getChannelId(),channel);
@@ -114,12 +131,33 @@ public class Connection {
         } catch (IOException e) {
             System.out.println("[Connection] 创建channel失败:"+channel.getChannelId());
         }
-        //
         if(!ok){
-            //创建失败则进行回滚操作
+            //创建失败则进行回滚操作，不能把不可用的channel交出去
             channelMap.remove(channel.getChannelId());
+            throw new mqException("[Connection] channel创建失败:"+channel.getChannelId());
         }
-        System.out.println("[Connection] 创建channel信道成功:"+channel.getChannelId());
+        System.out.println("[Connection] 创建channel信道成功(未认证):"+channel.getChannelId());
+        return channel;
+    }
+
+    //创建channel并立即用给定凭证登录（便捷版本）：登录失败回滚并抛认证异常
+    public Channel createChannel(String userName,String password) throws IOException, mqException {
+        //复用不登录版本完成channel创建
+        Channel channel=createChannel();
+        //建立连接后，马上进行登录请求
+        //登录失败：本channel未通过认证，服务器会拦截后续所有业务请求，必须直接失败
+        boolean loginOk=false;
+        try {
+            loginOk=channel.login(userName,password);
+        } catch (IOException e) {
+            System.out.println("[Connection] 登录请求发送失败:"+channel.getChannelId());
+        }
+        if(!loginOk){
+            //回滚并抛出认证异常，避免调用方拿着未认证的channel继续操作、被服务器静默拦截成莫名其妙的false
+            channelMap.remove(channel.getChannelId());
+            throw new mqException("[Connection] 认证失败:用户名或密码错误,userName:"+userName
+                    +",channelId:"+channel.getChannelId());
+        }
         return channel;
     }
 

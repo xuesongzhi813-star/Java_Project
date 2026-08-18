@@ -226,7 +226,7 @@ public class Channel {
 
 
     // 10.订阅消息
-    public boolean basicSubscribe(MessageQueue queue, boolean autoAck, Consumer consumer) throws IOException, mqException {
+    public boolean basicSubscribe(String queueName, boolean autoAck, Consumer consumer) throws IOException, mqException {
         // 先设置回调.
         if (this.consumer != null) {
             throw new mqException("该 channel 已经设置过消费消息的回调了, 不能重复设置!");
@@ -237,7 +237,7 @@ public class Channel {
         arguments.setRid(genereteRid());
         arguments.setChannelId(channelId);
         arguments.setConsumerTag(channelId);  // 此处 consumerTag 也使用 channelId 来表示了.
-        arguments.setQueue(queue);
+        arguments.setQueueName(queueName);
         arguments.setAutoAck(autoAck);
         byte[] payload = BinaryTool.toByte(arguments);
 
@@ -267,6 +267,50 @@ public class Channel {
         connection.writeRequest(request);
         BasicReturns basicReturns = waitReturn(arguments.getRid());
         return basicReturns.isOk();
+    }
+
+    //登录请求
+    public boolean login(String userName, String password) throws IOException {
+        LoginArguments arguments=new LoginArguments();
+        arguments.setRid(genereteRid());
+        arguments.setChannelId(channelId);
+        arguments.setUserName(userName);
+        arguments.setPassword(password);
+        byte[] payload = BinaryTool.toByte(arguments);
+        Request request=new Request();
+        request.setType(0xd);
+        request.setLength(payload.length);
+        request.setPayload(payload);
+        connection.writeRequest(request);
+        BasicReturns basicReturns = waitReturn(arguments.getRid());
+        //登录失败明确打日志（用户名或密码错误），具体的中断/回滚逻辑由Connection.createChannel处理
+        if(!basicReturns.isOk()){
+            System.out.println("[Channel] 登录失败(用户名或密码错误):channelId:"+channelId);
+        }
+        return basicReturns.isOk();
+    }
+
+    //注册请求：注册成功后，直接采用注册时的用户名、密码登录，本channel即刻可用
+    public boolean register(String userName, String password) throws IOException {
+        RegisterArguments arguments=new RegisterArguments();
+        arguments.setRid(genereteRid());
+        arguments.setChannelId(channelId);
+        arguments.setUserName(userName);
+        arguments.setPassword(password);
+        byte[] payload = BinaryTool.toByte(arguments);
+        Request request=new Request();
+        request.setType(0xe);
+        request.setLength(payload.length);
+        request.setPayload(payload);
+        connection.writeRequest(request);
+        BasicReturns basicReturns=waitReturn(arguments.getRid());
+        if(!basicReturns.isOk()){
+            System.out.println("[Channel] 注册失败(用户名已存在或服务器异常):userName:"+userName+",channelId:"+channelId);
+            return false;
+        }
+        System.out.println("[Channel] 注册成功，自动登录中:userName:"+userName+",channelId:"+channelId);
+        //注册成功，凭证必然有效，直接登录（登录失败会打印日志并返回false）
+        return login(userName,password);
     }
 
     //connection接收到了响应--->发给channel种存储哈希表
@@ -310,4 +354,6 @@ public class Channel {
     public void setConsumer(Consumer consumer) {
         this.consumer = consumer;
     }
+
+
 }

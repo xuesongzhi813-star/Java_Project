@@ -163,29 +163,33 @@ public class DataBaseManagerTest {
 
     //测试用户插入
     @Test void insertUserTest(){
+        //注：init()会种子默认guest账户，用户数断言需基于“插入前基线”，不能写死绝对值
+        int before=dataBaseManager.selectAllUser().size();
         UserInfo userInfo=new UserInfo();
         userInfo.setUserName("admin");
         userInfo.setPassword("admin");
         dataBaseManager.insertUser(userInfo);
         List<UserInfo> userInfos = dataBaseManager.selectAllUser();
-        Assertions.assertEquals(1,userInfos.size());
-        Assertions.assertEquals("admin",userInfos.get(0).getUserName());
-        Assertions.assertEquals("admin",userInfos.get(0).getPassword());
+        Assertions.assertEquals(before+1,userInfos.size());
+        //guest的存在使get(0)不一定是admin，按用户名定位刚插入的记录
+        UserInfo inserted=userInfos.stream().filter(u->"admin".equals(u.getUserName())).findFirst().orElse(null);
+        Assertions.assertNotNull(inserted);
+        Assertions.assertEquals("admin",inserted.getPassword());
     }
 
     //测试用户删除
     @Test
     void deleteUserTest(){
+        //同上：以基线计数，guest种子账户不受影响
+        int before=dataBaseManager.selectAllUser().size();
         UserInfo userInfo=new UserInfo();
         userInfo.setUserName("admin");
         userInfo.setPassword("admin");
         dataBaseManager.insertUser(userInfo);
         List<UserInfo> userInfos = dataBaseManager.selectAllUser();
-        Assertions.assertEquals(1,userInfos.size());
-        Assertions.assertEquals("admin",userInfos.get(0).getUserName());
-        Assertions.assertEquals("admin",userInfos.get(0).getPassword());
+        Assertions.assertEquals(before+1,userInfos.size());
         dataBaseManager.deleteUser("admin");
         List<UserInfo> userInfosList=dataBaseManager.selectAllUser();
-        Assertions.assertEquals(0,userInfosList.size());
+        Assertions.assertEquals(before,userInfosList.size());
     }
 }

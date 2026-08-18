@@ -21,6 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.UUID;
 
 @SpringBootTest
 public class clientTest {
@@ -75,26 +76,26 @@ public class clientTest {
 
     //测试连接
     @Test
-    public void testConnection() throws IOException {
+    public void testConnection() throws IOException, mqException {
         connection=factory.createConnection();
         Assertions.assertNotNull(connection);
     }
 
     //测试创建channel
     @Test
-    public void testCreateChannel() throws IOException {
+    public void testCreateChannel() throws IOException, mqException {
         connection=factory.createConnection();
         Assertions.assertNotNull(connection);
-        Channel channel = connection.createChannel();
+        Channel channel = connection.createChannel("guest","guest");
         Assertions.assertNotNull(channel);
     }
 
     //测试交换机相关
     @Test
-    public void testExchange() throws IOException {
+    public void testExchange() throws IOException, mqException {
         connection=factory.createConnection();
         Assertions.assertNotNull(connection);
-        Channel channel = connection.createChannel();
+        Channel channel = connection.createChannel("guest","guest");
         Assertions.assertNotNull(channel);
         boolean ok = channel.exchangeDeclare("testExchange", exchangeType.DIRECT, true, false, null);
         Assertions.assertTrue(ok);
@@ -104,10 +105,10 @@ public class clientTest {
 
     //测试队列相关
     @Test
-    public void testQueue() throws IOException {
+    public void testQueue() throws IOException, mqException {
         connection=factory.createConnection();
         Assertions.assertNotNull(connection);
-        Channel channel = connection.createChannel();
+        Channel channel = connection.createChannel("guest","guest");
         Assertions.assertNotNull(channel);
         boolean ok=channel.queueDeclare("testQueue",false,true,false,null);
         Assertions.assertTrue(ok);
@@ -117,10 +118,10 @@ public class clientTest {
 
     //测试绑定相关
     @Test
-    public void testBinding() throws IOException {
+    public void testBinding() throws IOException, mqException {
         connection=factory.createConnection();
         Assertions.assertNotNull(connection);
-        Channel channel = connection.createChannel();
+        Channel channel = connection.createChannel("guest","guest");
         Assertions.assertNotNull(channel);
         boolean ok = channel.exchangeDeclare("testExchange", exchangeType.DIRECT, true, false, null);
         Assertions.assertTrue(ok);
@@ -141,7 +142,7 @@ public class clientTest {
     public void sendMessageTest() throws IOException, mqException, InterruptedException {
         connection=factory.createConnection();
         Assertions.assertNotNull(connection);
-        Channel channel = connection.createChannel();
+        Channel channel = connection.createChannel("guest","guest");
         Assertions.assertNotNull(channel);
         boolean ok = channel.exchangeDeclare("testExchange", exchangeType.DIRECT, true, false, null);
         Assertions.assertTrue(ok);
@@ -151,13 +152,8 @@ public class clientTest {
         Assertions.assertTrue(ok);
         ok=channel.basicPublish("testExchange","defaulttestQueue",new BasicProperties(),"hello".getBytes());
         Assertions.assertTrue(ok);
-        MessageQueue queue=new MessageQueue();
-        queue.setName("defaulttestQueue");
-        queue.setExclusive(false);
-        queue.setDurable(true);
-        queue.setAutoDelete(false);
         byte[] bytes="hello".getBytes();
-        ok=channel.basicSubscribe(queue, false, new Consumer() {
+        ok=channel.basicSubscribe("testQueue", false, new Consumer() {
             @Override
             public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) throws IOException {
                 System.out.println("开始消费消息");
@@ -168,6 +164,57 @@ public class clientTest {
         });
         Thread.sleep(500);
         Assertions.assertTrue(ok);
+        channel.closeChannel();
+        connection.close();
+    }
+
+    //测试注册：注册成功后自动用注册时的用户名密码登录，且登录后业务请求可正常执行
+    @Test
+    public void registerAndLoginTest() throws IOException, mqException, InterruptedException {
+        connection=factory.createConnection();
+        Assertions.assertNotNull(connection);
+        //先用默认guest账户登录，创建channel（未认证的channel会被服务器拦截业务请求）
+        Channel channel = connection.createChannel("guest","guest");
+        Assertions.assertNotNull(channel);
+        //注册随机新用户（用UUID保证每次运行用户名不重复，测试可重复执行）
+        //register内部：注册成功后直接用注册时的用户名密码登录本channel
+        String userName="user-"+ UUID.randomUUID();
+        boolean ok=channel.register(userName,"123456");
+        Assertions.assertTrue(ok,"注册并自动登录应成功");
+        //注册+自动登录后，本channel应能正常执行业务请求（若认证有问题会被拦截返回false）
+        ok=channel.exchangeDeclare("testExchange", exchangeType.DIRECT, true, false, null);
+        Assertions.assertTrue(ok,"登录后的channel应能正常执行业务请求");
+        channel.closeChannel();
+        connection.close();
+    }
+
+    //测试登录失败：错误密码创建channel应抛出认证异常，且不影响后续用正确凭证重试
+    @Test
+    public void loginFailTest() throws IOException, mqException {
+        connection=factory.createConnection();
+        Assertions.assertNotNull(connection);
+        //错误密码：createChannel内部登录失败，应抛出mqException（channel已回滚，不会交给调用方）
+        Assertions.assertThrows(mqException.class,()->connection.createChannel("guest","wrongpassword"));
+        //同一连接用正确凭证重新创建channel，应成功（登录失败只影响该channel，不搞垮连接）
+        Channel channel=connection.createChannel("guest","guest");
+        Assertions.assertNotNull(channel);
+    }
+
+    //测试“先注册后登录”解耦流程：无参createChannel不登录，数据库无该用户也能直接注册
+    //（解决“createChannel必须先登录、登录必须先注册”的死循环）
+    @Test
+    public void registerWithoutExistingAccountTest() throws IOException, mqException, InterruptedException {
+        connection=factory.createConnection();
+        Assertions.assertNotNull(connection);
+        //无参createChannel：只建channel不登录，新用户拿它发注册请求（不依赖guest等任何已有账户）
+        Channel channel=connection.createChannel();
+        Assertions.assertNotNull(channel);
+        String userName="user-"+ UUID.randomUUID();
+        boolean ok=channel.register(userName,"123456");
+        Assertions.assertTrue(ok,"新用户注册并自动登录应成功");
+        //注册+自动登录后，本channel应能正常执行业务请求
+        ok=channel.exchangeDeclare("testExchange", exchangeType.DIRECT, true, false, null);
+        Assertions.assertTrue(ok,"注册登录后的channel应能正常执行业务请求");
         channel.closeChannel();
         connection.close();
     }

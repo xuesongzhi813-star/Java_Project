@@ -20,20 +20,20 @@ public class ConsumerDemo {
         factory.setPort(9090);
 
         Connection connection=factory.createConnection();
-        Channel channel=connection.createChannel();
+                //使用本demo专属账户：首次运行自动注册并登录；再次运行(账户已存在)则注册失败，改为直接登录
+
+        //此时，已经注册过，直接登录
+        Channel channel=connection.createChannel("consumerUser","123456");
+//        if(!channel.register("consumerUser","123456")){
+//            channel.login("consumerUser","123456");
+//        }
 
         //创建交换机和队列(存在就不会再创建,都创建一下不影响)
         channel.exchangeDeclare("testExchange", exchangeType.DIRECT,true,false,null);
-        channel.queueDeclare("testQueue",true,false,false,null);
+        channel.queueDeclare("testQueue",true,false,true,null);
 
-        MessageQueue queue=new MessageQueue();
-        queue.setName("defaulttestQueue");
-        queue.setDurable(true);
-        queue.setExclusive(false);
-        queue.setAutoDelete(false);
-
-        //订阅
-        channel.basicSubscribe(queue, true, new Consumer() {
+        //订阅（直接传“原始”队列名，服务器端会自动补虚拟主机前缀）
+        channel.basicSubscribe("testQueue", true, new Consumer() {
             @Override
             public void deliverMessage(String conseumerTag, BasicProperties basicProperties, byte[] bytes) throws IOException {
                 System.out.println("[消费数据]开始");

@@ -1,5 +1,6 @@
 package org.example.messagequeuepromax.mqserver.datacenter;
 
+import org.example.messagequeuepromax.common.ConsumerEnv;
 import org.example.messagequeuepromax.common.mqException;
 import org.example.messagequeuepromax.mqserver.core.*;
 
@@ -70,13 +71,19 @@ public class MemoryDataCenter {
     }
     //队列的删除
     public void deleteQueue(String queueName){
+        //删除队列哈希表中本队列
         queueMap.remove(queueName);
+        //删除消息-队列哈希表中队列(若能执行到这，则一定已经经过了消息有无的判断)
+        messageBelongMap.remove(queueName);
+        //删除未确认消息
+        unAckMessageMap.remove(queueName);
         System.out.println("[MemoryDataCenter] 队列删除成功:"+queueName);
     }
     //查询指定队列
     public MessageQueue selectQueue(String queueName){
         return queueMap.get(queueName);
     }
+
     //根据 consumerTag（即channelId）移除消费者订阅：消费者连接断开时清理"死订阅"
     public void removeConsumerByTag(String consumerTag){
         if(consumerTag==null){
@@ -86,6 +93,26 @@ public class MemoryDataCenter {
             MessageQueue queue=entry.getValue();
             queue.deleteConsumerEnvByTag(consumerTag);
         }
+    }
+
+    //判断队列中“订阅的消费者集合”是否为空
+    public boolean ifEmptyQueue(MessageQueue queue){
+        synchronized (queue){
+            List<ConsumerEnv> consumerEnvList = queue.getConsumerEnvList();
+            if(consumerEnvList==null || consumerEnvList.size()==0){
+                return true;
+            }
+        }
+        return false;
+    }
+
+    //判断队列中是否还有消息
+    public boolean ifEmptyMessageQueue(MessageQueue queue){
+        LinkedList<Message> messages = messageBelongMap.get(queue.getName());
+        if(messages==null || messages.size()==0){
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -360,6 +387,11 @@ public class MemoryDataCenter {
         for (MessageQueue queue:queues){
             queueMap.put(queue.getName(),queue);
         }
+        //恢复所有的用户信息
+        List<UserInfo> userInfos=diskDataCenter.selectAllUser();
+        for (UserInfo userInfo:userInfos){
+            userMap.put(userInfo.getUserName(),userInfo);
+        }
         //恢复所有绑定
         List<Binding> bindings = diskDataCenter.selectAllBinding();
         for(Binding binding:bindings){
@@ -367,6 +399,12 @@ public class MemoryDataCenter {
             ConcurrentHashMap<String, Binding> stringBindingConcurrentHashMap = bindingMap.computeIfAbsent(binding.getExchangeName(), k -> new ConcurrentHashMap<>());
             stringBindingConcurrentHashMap.put(binding.getQueueName(), binding);
             bindingMap.put(binding.getExchangeName(),stringBindingConcurrentHashMap);
+        }
+        //恢复所有用户（否则服务器重启后 userMap 为空，所有用户都无法登录）
+        userMap.clear();
+        List<UserInfo> users = diskDataCenter.selectAllUser();
+        for (UserInfo user:users){
+            userMap.put(user.getUserName(), user);
         }
         //恢复所有消息
         for (MessageQueue queue:queues) {

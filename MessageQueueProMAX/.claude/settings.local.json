@@ -3,7 +3,24 @@
     "allow": [
       "PowerShell(mvn *)",
       "PowerShell(.\\\\mvnw.cmd -q compile 2>&1 | Select-Object -Last 50)",
-      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd -q compile 2>&1 | Select-Object -Last 50)"
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd -q compile 2>&1 | Select-Object -Last 50)",
+      "PowerShell($candidates = @\\(\"C:\\\\Program Files\\\\Java\", \"C:\\\\Program Files\\\\Eclipse Adoptium\", \"C:\\\\Program Files\\\\Microsoft\", \"$env:LOCALAPPDATA\\\\Programs\"\\) | Where-Object { Test-Path $_ }; foreach \\($c in $candidates\\) { Get-ChildItem $c -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName })",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd -q compile 2>&1 | Select-Object -Last 25)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-Object -Last 40)",
+      "PowerShell(Select-String -Path .\\\\target\\\\surefire-reports\\\\org.example.messagequeuepromax.VirtualHostTest.txt -Pattern \"VirtualHostTest.java:\\\\d+\" | ForEach-Object { $_.Matches[0].Value }; \"--- data dir now:\"; Get-ChildItem .\\\\data -ErrorAction SilentlyContinue | Select-Object Name)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-String -Pattern \"Tests run|ERROR\\\\]   \" | Select-Object -First 15)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-String -Pattern \"ERROR|BUILD\" | Select-Object -First 12)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-String -Pattern \"Tests run:|ERROR\\\\]   |COMPILATION\" | Select-Object -First 15)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q \"-Dtest=AutoDeleteTest\" 2>&1 | Select-String -Pattern \"Tests run|ERROR\\\\]   \" | Select-Object -First 10)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q \"-Dtest=AutoDeleteTest\" 2>&1 | Select-Object -Last 30)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q \"-Dtest=AutoDeleteTest\" 2>&1 | Select-Object -Last 15)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q \"-Dtest=AutoDeleteTest\" 2>&1 | Select-String -Pattern \"Tests run|ERROR\\\\]   |队列自动删除\" | Select-Object -First 12)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-String -Pattern \"Tests run: \\\\d+, Fail\" | Select-Object -Last 3)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-String -Pattern \"Tests run: \\\\d+, Fail|ERROR\\\\]   |COMPILATION\" | Select-Object -First 12)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Select-String -Path \"src\\\\main\\\\java\\\\org\\\\example\\\\messagequeuepromax\\\\demo\\\\Producer1Demo.java\",\"src\\\\main\\\\java\\\\org\\\\example\\\\messagequeuepromax\\\\demo\\\\Producer2Demo.java\" -Pattern \"import org.example.messagequeuepromax.common\" | ForEach-Object { $_.Filename + \": \" + $_.Line.Trim\\(\\) })",
+      "PowerShell($files = @\\(\"src\\\\main\\\\java\\\\org\\\\example\\\\messagequeuepromax\\\\demo\\\\Producer1Demo.java\", \"src\\\\main\\\\java\\\\org\\\\example\\\\messagequeuepromax\\\\demo\\\\Producer2Demo.java\"\\); foreach \\($f in $files\\) { $c = Get-Content $f -Raw; $c = $c.Replace\\(\"import org.example.messagequeuepromax.common.exchangeType;\", \"import org.example.messagequeuepromax.common.exchangeType;`nimport org.example.messagequeuepromax.common.mqException;\"\\); Set-Content $f $c -NoNewline }; $env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q 2>&1 | Select-String -Pattern \"Tests run: \\\\d+, Fail|ERROR\\\\]   |COMPILATION\" | Select-Object -First 12)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd test -q \"-Dtest=LoginTest,clientTest,DataBaseManagerTest\" 2>&1 | Select-String -Pattern \"Tests run|ERROR\\\\]   |COMPILATION\" | Select-Object -First 10)"
     ]
   }
 }

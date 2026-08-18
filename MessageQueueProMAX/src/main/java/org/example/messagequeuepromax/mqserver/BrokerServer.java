@@ -27,6 +27,9 @@ public class BrokerServer {
     private ExecutorService executorService;
     //控制服务器运行的开关-->volatile是为了让服务器能感知到“取值变化”，及时做出应答
     private volatile boolean ok=true;
+    //登录认证过的用户表（未在表中，不能进行其他操作）
+    //key:channelId,value:userName
+    private ConcurrentHashMap<String,String> authorizedMap=new ConcurrentHashMap<>();
 
     public BrokerServer(int port) throws IOException {
         this.serverSocket=new ServerSocket(port);
@@ -107,8 +110,28 @@ public class BrokerServer {
             connectionMap.remove(channelId);
             //消费者连接断开时，同步清理该 channel（consumerTag）对应的订阅，避免死订阅继续占位
             virtualHost.getMemoryDataCenter().removeConsumerByTag(channelId);
+            virtualHost.onConsumerDisconnect(channelId);
+            //生产者连接断开时，同步检查该 channel 关联的 autoDelete 交换机，无其他生产者则自动删除
+            virtualHost.onProducerDisconnect(channelId);
+            //连接断开，认证随之失效，移出认证表（否则socket死亡后channelId残留，形成幽灵认证）
+            authorizedMap.remove(channelId);
         }
         System.out.println("[BrokerServer] channel信道关闭完成:"+clientSocket.getInetAddress().toString());
+    }
+
+    //构造"未登录拒绝"响应：type=0xd 标记认证拒绝（区别于普通业务响应0x0和消息推送0xc）
+    //payload 用 BasicReturns(ok=false)，rid/channelId 原样带回，客户端按rid配对的等待机制才能正常解除阻塞
+    private Response buildAuthRequiredResponse(BasicArguments basicArguments){
+        BasicReturns basicReturns=new BasicReturns();
+        basicReturns.setRid(basicArguments.getRid());
+        basicReturns.setChannelId(basicArguments.getChannelId());
+        basicReturns.setOk(false);
+        byte[] payload = BinaryTool.toByte(basicReturns);
+        Response response=new Response();
+        response.setType(0xd);
+        response.setLength(payload.length);
+        response.setPayload(payload);
+        return response;
     }
 
     //读取请求信息，即读取三次，填充好“自定义request格式的内容”
@@ -146,6 +169,15 @@ public class BrokerServer {
         //根据type值解析请求目的
         //本次请求的处理结果
         boolean result=true;
+        //判断当前channel是否已认证
+        //白名单：0x1创建信道、0x2关闭信道（未认证也要能干净退出）、0xd登录、0xe注册（否则无法创建首个用户）
+        if(request.getType()!=0x1 && request.getType()!=0x2 && request.getType()!=0xd
+                && request.getType()!=0xe && !authorizedMap.containsKey(basicArguments.getChannelId())){
+            //未登录：必须返回完整格式的响应（rid原样带回，客户端才能解除等待）；返回null会导致writeResponse空指针、客户端卡死
+            System.out.println("[BrokerServer] 拦截未登录请求:type:"+request.getType()
+                    +",channelId:"+basicArguments.getChannelId());
+            return buildAuthRequiredResponse(basicArguments);
+        }
         if(request.getType()==0x1){
             //创建channel
             connectionMap.put(basicArguments.getChannelId(),clientSocket);
@@ -155,6 +187,12 @@ public class BrokerServer {
             connectionMap.remove(basicArguments.getChannelId());
             //关闭channel时，同步清理该消费者（consumerTag==channelId）的订阅，避免死订阅继续占位
             virtualHost.getMemoryDataCenter().removeConsumerByTag(basicArguments.getChannelId());
+            //关闭channel时，检查本次队列中订阅消费者是否为空，若为空则自动删除
+            virtualHost.onConsumerDisconnect(basicArguments.getChannelId());
+            //关闭channel时，同步检查该生产者 channel 关联的 autoDelete 交换机，无其他生产者则自动删除
+            virtualHost.onProducerDisconnect(basicArguments.getChannelId());
+            //关闭channel时，同步去除认证对象
+            authorizedMap.remove(basicArguments.getChannelId());
             System.out.println("[BrokerServer] 关闭channel成功，channelId:"+basicArguments.getChannelId());
         } else if (request.getType()==0x3) {
             //创建交换机
@@ -183,13 +221,13 @@ public class BrokerServer {
             BindingDeleteArguments arguments= (BindingDeleteArguments) basicArguments;
             result=virtualHost.bindingDelete(arguments.getBinding());
         } else if (request.getType()==0x9) {
-            //发布消息
+            //发布消息（传入 channelId，供 VirtualHost 登记生产者关联，用于交换机 autoDelete）
             BasicPublishArguments arguments= (BasicPublishArguments) basicArguments;
-            result=virtualHost.basicPublish(arguments.getExchangeName(), arguments.getRoutingKey(), arguments.getBasicProperties(), arguments.getBody());
+            result=virtualHost.basicPublish(basicArguments.getChannelId(),arguments.getExchangeName(), arguments.getRoutingKey(), arguments.getBasicProperties(), arguments.getBody());
         } else if (request.getType()==0xa) {
             //订阅消息
             BasicSubscribeArguments arguments= (BasicSubscribeArguments) basicArguments;
-            result=virtualHost.basicSubscribe(arguments.getQueue(), arguments.getConsumerTag(), arguments.isAutoAck()
+            result=virtualHost.basicSubscribe(arguments.getQueueName(), arguments.getConsumerTag(), arguments.isAutoAck()
                     , new Consumer() {
                         @Override
                         public void deliverMessage(String consumerTag, BasicProperties basicProperties, byte[] body) throws IOException {
@@ -225,7 +263,28 @@ public class BrokerServer {
             //手动应答
             BasicAckArguments arguments= (BasicAckArguments) basicArguments;
             result=virtualHost.basicAck(arguments.getQueue(), arguments.getMessage());
-        }else {
+        } else if (request.getType()==0xd) {
+            //用户登录请求
+            LoginArguments arguments= (LoginArguments) basicArguments;
+            result=virtualHost.login(arguments.getUserName(), arguments.getPassword());
+            //如果用户登录成功添加认证
+            if (result){
+                authorizedMap.put(arguments.getChannelId(), arguments.getUserName());
+                System.out.println("[BrokerServer] 登录成功:userName:"+arguments.getUserName()
+                        +",channelId:"+arguments.getChannelId());
+            }
+            else {
+                //失败：①不加入集合（本来就不在，无需额外动作）
+                //     ②若该 channel 之前认证过，本次重新登录失败则踢出，避免"半认证"状态
+                authorizedMap.remove(basicArguments.getChannelId());
+                System.out.println("[BrokerServer] 登录失败:userName:"+arguments.getUserName()
+                        +",channelId:"+basicArguments.getChannelId());
+            }
+        } else if (request.getType()==0xe) {
+            //用户注册请求
+            RegisterArguments arguments= (RegisterArguments) basicArguments;
+            result=virtualHost.register(arguments.getUserName(), arguments.getPassword());
+        } else {
             //非法type
             throw new mqException("[BrokerServer] 请求typeAPI异常，请检查type:"+request.getType());
         }

@@ -1,9 +1,6 @@
 package org.example.messagequeuepromax.mqserver;
 
-import org.example.messagequeuepromax.common.Consumer;
-import org.example.messagequeuepromax.common.ConsumerEnv;
-import org.example.messagequeuepromax.common.exchangeType;
-import org.example.messagequeuepromax.common.mqException;
+import org.example.messagequeuepromax.common.*;
 import org.example.messagequeuepromax.mqserver.core.*;
 import org.example.messagequeuepromax.mqserver.datacenter.DiskDataCenter;
 import org.example.messagequeuepromax.mqserver.datacenter.MemoryDataCenter;
@@ -26,9 +23,20 @@ public class VirtualHost {
     //调用操作内存上数据的对象
     private MemoryDataCenter memoryDataCenter=new MemoryDataCenter();
     Router router=new Router();
-    //两个锁对象，涉及创建，删除操作，多线程操作可能出现“线程安全”问题
+    //三个锁对象，涉及创建，删除操作，多线程操作可能出现“线程安全”问题
     private Object exchangeLocker=new Object();
     private Object queueLocker=new Object();
+    private Object userLocker=new Object();
+    //生产者追踪表：channelId -> 该 channel 发布过消息的交换机集合（存“原始”交换机名，不带虚拟主机前缀）
+    //用于交换机 autoDelete：断开的 channel 若是某 autoDelete 交换机的最后一个生产者，则自动删除该交换机
+    //注：链表本身非线程安全，读写均需 synchronized(链表对象) 保护
+    private ConcurrentHashMap<String, LinkedList<String>> producerExchangeMap=new ConcurrentHashMap<>();
+
+    //消费者追踪表：防止造成“还未添加消息的队列被误删除”
+    //key：channelId，消费（订阅）过消息的信道，value：queueName，本次订阅涉及的queue
+    // 注：链表本身非线程安全，读写均需synchronized（链表对象）保护
+    private ConcurrentHashMap<String,LinkedList<String>> consumerQueueMap=new ConcurrentHashMap<>();
+
 
     public String getVirtualHostName() {
         return virtualHostName;
@@ -173,12 +181,12 @@ public class VirtualHost {
     //4.销毁队列
     public boolean queueDelete(String name) throws mqException {
         String queueName=virtualHostName+name;
+        synchronized (queueLocker){
         //先判断删除队列是否存在
         if(memoryDataCenter.selectQueue(queueName)==null){
             throw new mqException("[VirtualHost] 要删除的队列不存在，queueName:"+queueName);
         }
         //进行删除操作
-        synchronized (queueLocker){
             try {
                 //先进行解绑操作，再进行删除
                 List<Binding> queueBinding = memoryDataCenter.getQueueBinding(queueName);
@@ -281,7 +289,13 @@ public class VirtualHost {
 
     //7.发送消息到指定交换机/队列
     //注解：这里不需要队列名：1.若是DIRECT交换机，routingKey就是指定交换机名字；2.FANOUT交换机，绑定的全都发；3.TOPIC交换机要验证bindingKey和routingKey匹配
+    //保留原签名，内部委托给带 channelId 的重载（channelId 传 null 表示不经网络直调，不做生产者登记），不破坏既有调用方（如测试代码）
     public boolean basicPublish(String name,String routingKey,BasicProperties basicProperties,byte[] body) throws mqException {
+        return basicPublish(null,name,routingKey,basicProperties,body);
+    }
+
+    //带 channelId 的重载：channelId 用于登记“生产者 channel -> 发布过的交换机”关联，供交换机 autoDelete 使用
+    public boolean basicPublish(String channelId,String name,String routingKey,BasicProperties basicProperties,byte[] body) throws mqException {
         //先给交换机加上归属的虚拟主机的标识
         String exchangeName=virtualHostName+name;
         //判断routingKey是否合法？
@@ -292,6 +306,16 @@ public class VirtualHost {
         //判断交换机
         if(exchange==null){
             throw new mqException("[VirtualHost] 该交换机为空:"+exchangeName);
+        }
+        //交换机存在，登记生产者关联（登记“原始”交换机名，便于删除时直接复用 exchangeDelete(name)）
+        //链表非线程安全，需同步保护；先判存在再添加，避免同一 channel 重复发布时链表堆积重复项
+        if(channelId!=null){
+            LinkedList<String> exchangeNames = producerExchangeMap.computeIfAbsent(channelId, k -> new LinkedList<>());
+            synchronized (exchangeNames){
+                if(!exchangeNames.contains(name)){
+                    exchangeNames.add(name);
+                }
+            }
         }
         synchronized (exchangeLocker) {
             synchronized (queueLocker) {
@@ -364,7 +388,7 @@ public class VirtualHost {
                 diskDataCenter.writeMessage(queue, message);
             }
             System.out.println();
-            //通知消费者消费TODO
+            //通知消费者消费
         //三种交换机类型都要调用本方法（sendMessage），因为发送完消息，还要即使通知消费者来消费
         ConsumerManager consumerManager=new ConsumerManager(this);
         consumerManager.notifyConsumer(queue.getName());
@@ -372,13 +396,27 @@ public class VirtualHost {
 
     //8.订阅消息
     //参数都是构造消费者对象的基本参数
-    public boolean basicSubscribe(MessageQueue queue,String consumerTag, boolean autoAck, Consumer consumer){
+    public boolean basicSubscribe(String qname,String consumerTag, boolean autoAck, Consumer consumer){
+        String queueName=virtualHostName+qname;
         synchronized (queueLocker) {
             ConsumerManager consumerManager = new ConsumerManager(this);
             //添加到指定队列的消费者集合
             try {
-                consumerManager.addConsumer(queue.getName(),consumerTag,autoAck,consumer);
-                System.out.println("[VirtualHost] 订阅成功,queueName:"+queue.getName()+",consumerTag:"+consumerTag);
+                consumerManager.addConsumer(queueName,consumerTag,autoAck,consumer);
+
+                //规则：consumerTag==channelId，可以不用重载方法
+                //添加本次订阅的channel信道-队列进入追踪表，不存在则创建
+                if(consumerTag!=null){
+                    LinkedList<String> queueNames=consumerQueueMap.computeIfAbsent(consumerTag,k->new LinkedList<>());
+                    synchronized (queueNames){
+                        //判重和添加必须用同一个名字体系（qname 原始名），否则判重永远不命中，重复订阅会堆积重复项
+                        if(!queueNames.contains(qname)){
+                            queueNames.add(qname);
+                        }
+                    }
+                }
+
+                System.out.println("[VirtualHost] 订阅成功,queueName:"+queueName+",consumerTag:"+consumerTag);
                 return true;
             } catch (mqException e) {
                 System.out.println("[VirtualHost] 订阅失败");
@@ -413,5 +451,140 @@ public class VirtualHost {
             System.out.println("[VirtualHost] 手动应答失败:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
             return false;
         }
+    }
+
+    //10.生产者连接断开后的交换机自动删除检查
+    //该 channel 若是某 autoDelete 交换机的“最后一个生产者”，则自动删除该交换机（复用 exchangeDelete，自带解绑+内存硬盘删除+锁保护）
+    public void onProducerDisconnect(String channelId){
+        if(channelId==null){
+            return;
+        }
+        //取出并移除该 channel 发布过的交换机集合
+        LinkedList<String> exchangeNames = producerExchangeMap.remove(channelId);
+        if(exchangeNames==null || exchangeNames.isEmpty()){
+            return;
+        }
+        for(String name:exchangeNames){
+            try {
+                Exchange exchange=memoryDataCenter.selectExchange(virtualHostName+name);
+                //交换机已不存在（被手动删除等），或未开启自动删除，跳过
+                if(exchange==null || !exchange.isAutoDelete()){
+                    continue;
+                }
+                //检查是否还有其他生产者 channel 发布过该交换机，有则不能删除
+                boolean hasOtherProducer=false;
+                for(LinkedList<String> list:producerExchangeMap.values()){
+                    synchronized (list){
+                        if(list.contains(name)){
+                            hasOtherProducer=true;
+                            break;
+                        }
+                    }
+                }
+                if(hasOtherProducer){
+                    continue;
+                }
+                //最后一个生产者已断开，执行自动删除（name 是“原始”交换机名，exchangeDelete 内部会补虚拟主机前缀）
+                exchangeDelete(name);
+                System.out.println("[VirtualHost] 交换机自动删除成功(无生产者连接),exchangeName:"+virtualHostName+name);
+            }catch (mqException e){
+                System.out.println("[VirtualHost] 交换机自动删除失败,exchangeName:"+virtualHostName+name);
+            }
+        }
+    }
+
+    //11.消费者断开连接后，检查自动删除队列
+    public void onConsumerDisconnect(String channelId){
+
+        synchronized (queueLocker){
+        if(channelId==null){
+            return;
+        }
+        //先移除本“追踪表”中的队列（与存储队列没有关系，内存+硬盘的并未因这步操作而删除）
+            LinkedList<String> queues = consumerQueueMap.remove(channelId);
+        if(queues==null || queues.size()==0){
+            return;
+        }
+
+        //检查本次channel删除后，是否有“消费标识”的队列中订阅消费者集合为空
+            for (String queueName:queues){
+            // 检查本次channel删除后，是否有队列中订阅消费者集合为空
+            //追踪表存的是“原始”队列名，而 queueMap 的 key 带虚拟主机前缀，查询时需补前缀才能命中
+            MessageQueue queue = memoryDataCenter.selectQueue(virtualHostName+queueName);
+            //遍历查询是否打开“自动删除”/已经被删除了
+            //检查“已删除”/“未开启自动删除”的队列，则不用管
+            if (queue == null || !queue.isAutoDelete()) {
+                continue;
+            }
+
+            //检查这些队列是否消费者订阅集合为空
+                boolean ok = memoryDataCenter.ifEmptyQueue(queue);
+            //如果为空，则继续检查队列中是否还有消息：若有消息则不删除；若有的是“未确定消息”则删除
+                if(ok){
+                    //判断队列中有无消息
+                    boolean messageOn=memoryDataCenter.ifEmptyMessageQueue(queue);
+                    //如果有消息，则不删除
+                    if(messageOn){
+                        continue;
+                    }
+                }else {
+                    //若还有消费者，则不删除
+                    continue;
+                }
+            //什么都没有，直接删除
+            try {
+                //删除必须传“原始”队列名：queueDelete 内部会补前缀，若传 queue.getName()（已带前缀）会双重前缀导致删除失败
+                queueDelete(queueName);
+                System.out.println("[VirtualHost] 队列自动删除成功，queueName:" + queue.getName());
+            } catch (mqException e) {
+                System.out.println("[VirtualHost] 队列自动删除失败，queueName:" + queue.getName());
+            }
+        }
+    }
+    }
+
+    //12.用户登录
+    public boolean login(String userName,String password){
+        //空判：凭证为null直接失败（否则userMap.get(null)会抛NPE，且NPE会让客户端收不到响应而卡死）
+        if(userName==null || password==null){
+            System.out.println("[VirtualHost] 登录失败:用户名或密码为空");
+            return false;
+        }
+        //根据“用户名”（主键）查询用户
+        UserInfo user = memoryDataCenter.getUser(userName);
+        //判断用户是否存在
+        //注：对外统一返回false，不区分“用户不存在”和“密码错误”，避免被用于探测有效用户名；区分信息只进日志
+        if(user==null){
+            System.out.println("[VirtualHost] 用户不存在:"+userName);
+            return false;
+        }
+        //匹配参数
+        if(Md5Utils.verify(password,user.getPassword())){
+            System.out.println("[VirtualHost] 用户匹配成功，登录成功，欢迎用户:"+userName);
+            return true;
+        }
+        //匹配参数失败
+        System.out.println("[VirtualHost] 密码错误，用户匹配失败:"+userName);
+        return false;
+    }
+
+    //13.用户注册
+    public boolean register(String userName,String password) {
+        synchronized (userLocker) {
+            //先检查数据库中是否含有该用户
+            UserInfo user = memoryDataCenter.getUser(userName);
+            if (user != null) {
+                System.out.println("[VirtualHost] 账户已存在！注册失败");
+                return false;
+            }
+            //不存在该用户则进行注册:内存+硬盘
+            UserInfo userInfo = new UserInfo();
+            userInfo.setUserName(userName);
+            userInfo.setPassword(Md5Utils.encrytion(password));
+            memoryDataCenter.insertUser(userInfo);
+            diskDataCenter.insertUser(userInfo);
+            System.out.println("[VirtualHost] 用户注册成功，欢迎用户:"+userName);
+        }
+        return true;
     }
 }
