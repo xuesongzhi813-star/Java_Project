@@ -17,15 +17,15 @@ import java.util.concurrent.Executors;
  * 服务器的实现代码：
  */
 public class BrokerServer {
-    //“服务器”接收“客户端”请求的“前台接待”-->最终每个被接待的“客户端”，都会有一个独属的“clientSocket”
+    //"服务器"接收"客户端"请求的"前台接待"-->最终每个被接待的"客户端"，都会有一个独属的"clientSocket"
     private ServerSocket serverSocket;
-    //考虑此时只有一个“虚拟主机”的情况
+    //考虑此时只有一个"虚拟主机"的情况
     private VirtualHost virtualHost=new VirtualHost("default");
     //哈希表，key表示channelId表示当前通信是哪个通道，value表示clientSocket表示当前通道，通信的载体
     private ConcurrentHashMap<String, Socket> connectionMap=new ConcurrentHashMap<>();
     //线程池，处理多个客户端的请求
     private ExecutorService executorService;
-    //控制服务器运行的开关-->volatile是为了让服务器能感知到“取值变化”，及时做出应答
+    //控制服务器运行的开关-->volatile是为了让服务器能感知到"取值变化"，及时做出应答
     private volatile boolean ok=true;
     //登录认证过的用户表（未在表中，不能进行其他操作）
     //key:channelId,value:userName
@@ -108,6 +108,8 @@ public class BrokerServer {
         //删除当前socket对应的channel（因为socket已关闭）
         for (String channelId:list){
             connectionMap.remove(channelId);
+            //消费者断开连接：该 channel 未确认的消息全部 requeue，避免消息丢失
+            virtualHost.requeueOnDisconnect(channelId);
             //消费者连接断开时，同步清理该 channel（consumerTag）对应的订阅，避免死订阅继续占位
             virtualHost.getMemoryDataCenter().removeConsumerByTag(channelId);
             virtualHost.onConsumerDisconnect(channelId);
@@ -134,7 +136,7 @@ public class BrokerServer {
         return response;
     }
 
-    //读取请求信息，即读取三次，填充好“自定义request格式的内容”
+    //读取请求信息，即读取三次，填充好"自定义request格式的内容"
     private Request readRequest(DataInputStream dataInputStream) throws IOException {
         Request request=new Request();
         request.setType(dataInputStream.readInt());
@@ -223,7 +225,16 @@ public class BrokerServer {
         } else if (request.getType()==0x9) {
             //发布消息（传入 channelId，供 VirtualHost 登记生产者关联，用于交换机 autoDelete）
             BasicPublishArguments arguments= (BasicPublishArguments) basicArguments;
-            result=virtualHost.basicPublish(basicArguments.getChannelId(),arguments.getExchangeName(), arguments.getRoutingKey(), arguments.getBasicProperties(), arguments.getBody());
+            PublishAckReturns publishAckReturns = virtualHost.basicPublish(basicArguments.getChannelId(), arguments.getExchangeName(), arguments.getRoutingKey(), arguments.getBasicProperties(), arguments.getBody());
+            publishAckReturns.setRid(arguments.getRid());
+            publishAckReturns.setChannelId(arguments.getChannelId());
+            //提前构造响应返回
+            byte[] payload = BinaryTool.toByte(publishAckReturns);
+            Response response=new Response();
+            response.setType(0x0);
+            response.setLength(payload.length);
+            response.setPayload(payload);
+            return response;
         } else if (request.getType()==0xa) {
             //订阅消息
             BasicSubscribeArguments arguments= (BasicSubscribeArguments) basicArguments;
@@ -244,6 +255,7 @@ public class BrokerServer {
                             subscribeReturns.setConsumerTag(consumerTag);
                             subscribeReturns.setBasicProperties(basicProperties);
                             subscribeReturns.setBody(body);
+                            subscribeReturns.setMessageId(basicProperties.getMessageId());
                             subscribeReturns.setRid("");
                             //当前设计里 consumerTag 就代表 channelId，必须设置，否则客户端 channelMap.get(null) 会 NPE
                             subscribeReturns.setChannelId(consumerTag);
@@ -284,6 +296,10 @@ public class BrokerServer {
             //用户注册请求
             RegisterArguments arguments= (RegisterArguments) basicArguments;
             result=virtualHost.register(arguments.getUserName(), arguments.getPassword());
+        } else if (request.getType()==0xf) {
+            //拒绝应答
+            BasicRejectArguments arguments= (BasicRejectArguments) basicArguments;
+            result=virtualHost.basicReject(arguments.getQueue(),arguments.getMessage(),arguments.isRequeue());
         } else {
             //非法type
             throw new mqException("[BrokerServer] 请求typeAPI异常，请检查type:"+request.getType());

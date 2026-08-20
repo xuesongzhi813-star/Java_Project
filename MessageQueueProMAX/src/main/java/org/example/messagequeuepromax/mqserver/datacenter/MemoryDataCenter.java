@@ -30,7 +30,7 @@ public class MemoryDataCenter {
     //消息管理
     //第一个哈希表，管理消息的存储（即只是消息本身同交换机类似），key为messageId，value为message对象
     private ConcurrentHashMap<String, Message> messageMap=new ConcurrentHashMap<>();
-    //第二个哈希表，管理消息要发送到的队列关系，key：queueName，value：属于本队列的“消息集合”
+    //第二个哈希表，管理消息要发送到的队列关系，key：queueName，value：属于本队列的"消息集合"
     private ConcurrentHashMap<String, LinkedList<Message>> messageBelongMap=new ConcurrentHashMap<>();
 
     //未确认的消息：key1为queueName，key2为messageId，value为未确认的Message对象
@@ -95,7 +95,7 @@ public class MemoryDataCenter {
         }
     }
 
-    //判断队列中“订阅的消费者集合”是否为空
+    //判断队列中"订阅的消费者集合"是否为空
     public boolean ifEmptyQueue(MessageQueue queue){
         synchronized (queue){
             List<ConsumerEnv> consumerEnvList = queue.getConsumerEnvList();
@@ -125,7 +125,7 @@ public class MemoryDataCenter {
             System.out.println("[MemoryDataCenter] 绑定对象为空");
             return;
         }
-        //查询这个交换机对应的“第二层绑定表”，存在则得到，不存在则现场创建（因为也要插绑定）
+        //查询这个交换机对应的"第二层绑定表"，存在则得到，不存在则现场创建（因为也要插绑定）
         ConcurrentHashMap<String,Binding> bindingHashMap=bindingMap.computeIfAbsent(binding.getExchangeName()
                 ,k->new ConcurrentHashMap<>());
         //查询第二层绑定表中，该绑定对应的queueName是否存在对应数据
@@ -167,7 +167,7 @@ public class MemoryDataCenter {
         return binding;
     }
 
-    //获取到交换机绑定的“队列集合”
+    //获取到交换机绑定的"队列集合"
     public LinkedList<Binding> getListBinding(String exchangeName) throws mqException {
         LinkedList<Binding> bindingLinkedList = new LinkedList<>();
         ConcurrentHashMap<String, Binding> bindingHashMap = bindingMap.get(exchangeName);
@@ -187,7 +187,7 @@ public class MemoryDataCenter {
         }
     }
 
-    //获取交换机下的所有“与队列的绑定”的集合
+    //获取交换机下的所有"与队列的绑定"的集合
     public ConcurrentHashMap<String,Binding> getExchangeBinding(String exchangeName){
         ConcurrentHashMap<String,Binding> map=bindingMap.get(exchangeName);
         if(map==null){
@@ -200,7 +200,7 @@ public class MemoryDataCenter {
     //获取该队列的所有绑定集合
     public List<Binding> getQueueBinding(String queueName){
         List<Binding> bindingList=new ArrayList<>();
-        //获取外层键值对的“值”-->获得内层的哈希表
+        //获取外层键值对的"值"-->获得内层的哈希表
         for(Map.Entry<String,ConcurrentHashMap<String,Binding>> entry:bindingMap.entrySet()){
             ConcurrentHashMap<String, Binding> value = entry.getValue();
             if(value.containsKey(queueName)){
@@ -268,10 +268,10 @@ public class MemoryDataCenter {
     /**
      * 关于消息与队列相关的管理实现
      */
-    //发送消息到指定队列-->放进每个队列对应的“消息集合”中
+    //发送消息到指定队列-->放进每个队列对应的"消息集合"中
     public void sendMessage(MessageQueue queue,Message message) throws mqException {
         synchronized (queue) {
-            //查询“消息集合”的存在，若不存在则直接创建一个
+            //查询"消息集合"的存在，若不存在则直接创建一个
             LinkedList<Message> messages = messageBelongMap.computeIfAbsent(queue.getName(), k -> new LinkedList<>());
             //放进消息集合即可
             if (message == null) {
@@ -290,7 +290,7 @@ public class MemoryDataCenter {
         synchronized (queue) {
             LinkedList<Message> messages = messageBelongMap.get(queue.getName());
             if (messages == null || messages.size() == 0) {
-                throw new mqException("[MemoryDataCenter] 该队列中“消息集合”中无消息:queueName:" + queue.getName());
+                throw new mqException("[MemoryDataCenter] 该队列中消息集合中无消息:queueName:" + queue.getName());
             }
             //取出一个消息，头删，先进先出
             return messages.poll();
@@ -313,7 +313,7 @@ public class MemoryDataCenter {
         }
     }
 
-    //返回指定队列的“消息集合长度”
+    //返回指定队列的"消息集合长度"
     public int getMessagesLength(String queueName) throws mqException {
         //获取集合
         LinkedList<Message> messages=messageBelongMap.get(queueName);
@@ -326,9 +326,9 @@ public class MemoryDataCenter {
     }
 
     /**
-     * 对“未确认消息”管理实现
+     * 对"未确认消息"管理实现
      */
-    //添加“未确认消息”
+    //添加"未确认消息"
     public void addUnAckMessage(String queueName,Message message) throws mqException {
         ConcurrentHashMap<String, Message> concurrentHashMap = unAckMessageMap.computeIfAbsent(queueName,
                 k -> new ConcurrentHashMap<>());
@@ -355,7 +355,7 @@ public class MemoryDataCenter {
             System.out.println("[MemoryDataCenter] 删除未确认数据成功:" + messageId);
         }
     }
-    //获取指定“未确认消息”
+    //获取指定"未确认消息"
     public Message getUnAckMessage(String queueName,String messageId){
         ConcurrentHashMap<String, Message> stringMessageConcurrentHashMap = unAckMessageMap.get(queueName);
         if(stringMessageConcurrentHashMap==null){
@@ -363,6 +363,33 @@ public class MemoryDataCenter {
         }
         Message message = stringMessageConcurrentHashMap.get(messageId);
         return message;
+    }
+    //按 messageId 遍历所有队列查找未确认消息(用于断开连接时 requeue)
+    public Message getUnAckMessageByMessageId(String messageId) {
+        for (ConcurrentHashMap<String, Message> map : unAckMessageMap.values()) {
+            Message message = map.get(messageId);
+            if (message != null) {
+                return message;
+            }
+        }
+        return null;
+    }
+    //按 messageId 遍历所有队列删除未确认消息(用于断开连接时 requeue)
+    public void deleteUnAckMessageByMessageId(String messageId) {
+        for (ConcurrentHashMap<String, Message> map : unAckMessageMap.values()) {
+            if (map.remove(messageId) != null) {
+                return;
+            }
+        }
+    }
+    //按 messageId 查找未确认消息所属的队列名(用于断开连接时 requeue)
+    public String findQueueNameByUnAckMessageId(String messageId) {
+        for (Map.Entry<String, ConcurrentHashMap<String, Message>> entry : unAckMessageMap.entrySet()) {
+            if (entry.getValue().containsKey(messageId)) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     /**
@@ -414,7 +441,7 @@ public class MemoryDataCenter {
                 //先完成消息信息表恢复
                 messageMap.put(message.getMessageId(), message);
             }
-            //再完成队列关系“消息集合”表恢复
+            //再完成队列关系"消息集合"表恢复
             messageBelongMap.put(queue.getName(), (LinkedList<Message>) messages);
         }
         //未确认消息丢了也无所谓

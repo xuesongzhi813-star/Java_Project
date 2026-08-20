@@ -23,10 +23,11 @@ public class ConsumerDemo {
                 //使用本demo专属账户：首次运行自动注册并登录；再次运行(账户已存在)则注册失败，改为直接登录
 
         //此时，已经注册过，直接登录
-        Channel channel=connection.createChannel("consumerUser","123456");
-//        if(!channel.register("consumerUser","123456")){
-//            channel.login("consumerUser","123456");
-//        }
+//       Channel channel=connection.createChannel("consumerUser","123456");
+        Channel channel=connection.createChannel();
+        if(!channel.register("consumerUser","123456")){
+            channel.login("consumerUser","123456");
+        }
 
         //创建交换机和队列(存在就不会再创建,都创建一下不影响)
         channel.exchangeDeclare("testExchange", exchangeType.DIRECT,true,false,null);

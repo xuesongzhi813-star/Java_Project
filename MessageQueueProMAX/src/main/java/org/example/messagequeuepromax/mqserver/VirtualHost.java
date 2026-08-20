@@ -6,9 +6,7 @@ import org.example.messagequeuepromax.mqserver.datacenter.DiskDataCenter;
 import org.example.messagequeuepromax.mqserver.datacenter.MemoryDataCenter;
 
 import java.io.IOException;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -23,19 +21,23 @@ public class VirtualHost {
     //调用操作内存上数据的对象
     private MemoryDataCenter memoryDataCenter=new MemoryDataCenter();
     Router router=new Router();
-    //三个锁对象，涉及创建，删除操作，多线程操作可能出现“线程安全”问题
+    //三个锁对象，涉及创建，删除操作，多线程操作可能出现"线程安全"问题
     private Object exchangeLocker=new Object();
     private Object queueLocker=new Object();
     private Object userLocker=new Object();
-    //生产者追踪表：channelId -> 该 channel 发布过消息的交换机集合（存“原始”交换机名，不带虚拟主机前缀）
+    //生产者追踪表：channelId -> 该 channel 发布过消息的交换机集合（存"原始"交换机名，不带虚拟主机前缀）
     //用于交换机 autoDelete：断开的 channel 若是某 autoDelete 交换机的最后一个生产者，则自动删除该交换机
     //注：链表本身非线程安全，读写均需 synchronized(链表对象) 保护
     private ConcurrentHashMap<String, LinkedList<String>> producerExchangeMap=new ConcurrentHashMap<>();
 
-    //消费者追踪表：防止造成“还未添加消息的队列被误删除”
+    //消费者追踪表：防止造成"还未添加消息的队列被误删除"
     //key：channelId，消费（订阅）过消息的信道，value：queueName，本次订阅涉及的queue
     // 注：链表本身非线程安全，读写均需synchronized（链表对象）保护
     private ConcurrentHashMap<String,LinkedList<String>> consumerQueueMap=new ConcurrentHashMap<>();
+
+    //消费者未确认消息追踪表：消费者断开连接时，自动 requeue 其未确认的消息
+    //key：consumerTag（即channelId），value：该消费者持有的未确认消息ID集合
+    private ConcurrentHashMap<String, Set<String>> consumerUnAckMap=new ConcurrentHashMap<>();
 
 
     public String getVirtualHostName() {
@@ -62,7 +64,7 @@ public class VirtualHost {
         this.memoryDataCenter = memoryDataCenter;
     }
 
-    //构造方法，传参虚拟主机名字-->作为区别不同虚拟主机的“唯一标识”
+    //构造方法，传参虚拟主机名字-->作为区别不同虚拟主机的"唯一标识"
     public VirtualHost(String VirtualHostName) {
         this.virtualHostName=VirtualHostName;
 
@@ -124,7 +126,7 @@ public class VirtualHost {
                 throw new mqException("[VirtualHost] 交换机不存在，删除异常，exchangeName:"+exchangeName);
             }
             try {
-                //先解除绑定再删除，因为绑定是“交换机”<=>“队列”一方被删除，绑定就不存在
+                //先解除绑定再删除，因为绑定是"交换机"<=>"队列"一方被删除，绑定就不存在
                 ConcurrentHashMap<String, Binding> queuesBinding = memoryDataCenter.getExchangeBinding(exchangeName);
                 if(queuesBinding!=null && !queuesBinding.isEmpty()){
                     //遍历值，删除
@@ -290,12 +292,12 @@ public class VirtualHost {
     //7.发送消息到指定交换机/队列
     //注解：这里不需要队列名：1.若是DIRECT交换机，routingKey就是指定交换机名字；2.FANOUT交换机，绑定的全都发；3.TOPIC交换机要验证bindingKey和routingKey匹配
     //保留原签名，内部委托给带 channelId 的重载（channelId 传 null 表示不经网络直调，不做生产者登记），不破坏既有调用方（如测试代码）
-    public boolean basicPublish(String name,String routingKey,BasicProperties basicProperties,byte[] body) throws mqException {
+    public PublishAckReturns basicPublish(String name,String routingKey,BasicProperties basicProperties,byte[] body) throws mqException {
         return basicPublish(null,name,routingKey,basicProperties,body);
     }
 
-    //带 channelId 的重载：channelId 用于登记“生产者 channel -> 发布过的交换机”关联，供交换机 autoDelete 使用
-    public boolean basicPublish(String channelId,String name,String routingKey,BasicProperties basicProperties,byte[] body) throws mqException {
+    //带 channelId 的重载：channelId 用于登记"生产者 channel -> 发布过的交换机"关联，供交换机 autoDelete 使用
+    public PublishAckReturns basicPublish(String channelId,String name,String routingKey,BasicProperties basicProperties,byte[] body) throws mqException {
         //先给交换机加上归属的虚拟主机的标识
         String exchangeName=virtualHostName+name;
         //判断routingKey是否合法？
@@ -307,7 +309,7 @@ public class VirtualHost {
         if(exchange==null){
             throw new mqException("[VirtualHost] 该交换机为空:"+exchangeName);
         }
-        //交换机存在，登记生产者关联（登记“原始”交换机名，便于删除时直接复用 exchangeDelete(name)）
+        //交换机存在，登记生产者关联（登记"原始"交换机名，便于删除时直接复用 exchangeDelete(name)）
         //链表非线程安全，需同步保护；先判存在再添加，避免同一 channel 重复发布时链表堆积重复项
         if(channelId!=null){
             LinkedList<String> exchangeNames = producerExchangeMap.computeIfAbsent(channelId, k -> new LinkedList<>());
@@ -317,25 +319,40 @@ public class VirtualHost {
                 }
             }
         }
+        //发送失败时，置属性时使用
+        String messageId=null;
+        String routingkey=null;
+        //构造发送返回应答
+        PublishAckReturns publishAckReturns=new PublishAckReturns();
         synchronized (exchangeLocker) {
             synchronized (queueLocker) {
                 try {
                     //判断交换机类型，决定如何发送消息
                     if (exchange.getExchangeType() == exchangeType.DIRECT) {
-                        //如果是DIRECT类型的交换机，routingKey就是发送的“目标队列名”
+                        //如果是DIRECT类型的交换机，routingKey就是发送的"目标队列名"
                         //直接发送过去即可
                         Message message = Message.messageFactory(body, basicProperties, routingKey);
+                        messageId=message.getMessageId();
+                        routingkey=message.getroutingKey();
                         //查询队列，并且直接发送
                         MessageQueue queue = memoryDataCenter.selectQueue(routingKey);
                         sendMessage(queue,message);
                         System.out.println("[VirtualHost] DIRECT类型交换机发送消息成功:exchangeName:"+exchangeName
                         +",routingKey:"+routingKey);
-                        return true;
+                        //构造发送消息的应答
+                        publishAckReturns=new PublishAckReturns();
+                        publishAckReturns.setMessageId(message.getMessageId());
+                        publishAckReturns.setRoutingKey(message.getroutingKey());
+                        publishAckReturns.setExchangeName(exchangeName);
+                        publishAckReturns.setOk(true);
+                        return publishAckReturns;
                     }
                     //FANOUT/TOPIC交换机的发送情况
                     else {
                         if(exchange.getExchangeType()==exchangeType.FANOUT){
                             Message message = Message.messageFactory(body, basicProperties, routingKey);
+                            messageId=message.getMessageId();
+                            routingkey=message.getroutingKey();
                             //FANOUT交换机对所有绑定的队列都进行发送操作
                             ConcurrentHashMap<String, Binding> exchangeBinding = memoryDataCenter.getExchangeBinding(exchangeName);
                             for (Map.Entry<String,Binding> entry:exchangeBinding.entrySet()){
@@ -348,9 +365,16 @@ public class VirtualHost {
                                 sendMessage(queue,message);
                                 System.out.println("[VirtualHost] FANOUT类型交换机发送消息成功:exchangeName:"+exchangeName
                                         +",routingKey:"+routingKey);
+                                publishAckReturns=new PublishAckReturns();
+                                publishAckReturns.setMessageId(message.getMessageId());
+                                publishAckReturns.setRoutingKey(message.getroutingKey());
+                                publishAckReturns.setExchangeName(exchangeName);
+                                publishAckReturns.setOk(true);
                             }
                         }else {
                             Message message=Message.messageFactory(body,basicProperties,routingKey);
+                            messageId=message.getMessageId();
+                            routingkey=message.getroutingKey();
                             //先找到交换机对应的绑定，TOPIC交换机需要binding中的bingdingKey
                             ConcurrentHashMap<String,Binding> map=memoryDataCenter.getExchangeBinding(exchangeName);
                             for(Map.Entry<String,Binding> entry:map.entrySet()){
@@ -368,16 +392,26 @@ public class VirtualHost {
                                     continue;
                                 }
                                 sendMessage(queue,message);
+                                publishAckReturns=new PublishAckReturns();
+                                publishAckReturns.setMessageId(message.getMessageId());
+                                publishAckReturns.setRoutingKey(message.getroutingKey());
+                                publishAckReturns.setExchangeName(exchangeName);
+                                publishAckReturns.setOk(true);
                             }
                         }
                     }
                 }catch (Exception e){
                     System.out.println("[VirtualHost]  消息发送失败"+e.getMessage());
-                    return false;
+                    publishAckReturns=new PublishAckReturns();
+                    publishAckReturns.setMessageId(messageId);
+                    publishAckReturns.setRoutingKey(routingKey);
+                    publishAckReturns.setExchangeName(exchangeName);
+                    publishAckReturns.setOk(false);
+                    return publishAckReturns;
                 }
             }
         }
-        return true;
+       return publishAckReturns;
     }
 
     private void sendMessage(MessageQueue queue, Message message) throws mqException, IOException, InterruptedException {
@@ -425,7 +459,7 @@ public class VirtualHost {
         }
     }
 
-    //9.手动应答，消息处理状态
+    //9.手动应答，消息处理状态-->消费好了消息
     public boolean basicAck(MessageQueue queue,Message message){
         //检查队列
         if(queue==null){
@@ -445,6 +479,8 @@ public class VirtualHost {
             if(message.getDurable()){
                 diskDataCenter.deleteMessage(queue,message);
             }
+            //清理 consumerTag 追踪(消费者显式 ACK 后,不再需要断开重试保护)
+            removeConsumerUnAck(message.getMessageId());
             System.out.println("[VirtualHost] 手动应答成功:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
             return true;
         }catch (Exception e){
@@ -453,8 +489,105 @@ public class VirtualHost {
         }
     }
 
+    //拒绝应答
+    public boolean basicReject(MessageQueue queue,Message message,boolean requeue){
+        //检查队列
+        if(queue==null){
+            return false;
+        }
+        //检查消息
+        if(message==null){
+            return false;
+        }
+        //先将消息从"未确认队列"中取出
+        memoryDataCenter.deleteUnAckMessage(queue.getName(),message.getMessageId());
+        //清理 consumerTag 追踪
+        removeConsumerUnAck(message.getMessageId());
+        //判断其是否需要返回队列消费
+        if(requeue){
+            try {
+                //需要返回队列重试:放回队头(用 requeueMessage,不用 sendMessage——消息已在 messageMap 中,无需重复登记)
+                memoryDataCenter.requeueMessage(queue,message);
+                //重新调用消费一次
+                ConsumerManager consumerManager=new ConsumerManager(this);
+                consumerManager.notifyConsumer(queue.getName());
+                System.out.println("[VirtualHost] 拒绝应答中，选择重新消息返回队列进行重试消费，queue:"+queue.getName()+"messageId:"+message.getMessageId());
+                return true;
+            } catch (mqException e) {
+                System.out.println("[VirtualHost] 重新放入队列中消费失败:queue:"+queue.getName()+",messageId:"+message.getMessageId());
+                return false;
+            } catch (InterruptedException e) {
+                System.out.println("[VirtualHost] 重新消费异常:queue:"+queue.getName()+":messageId:"+message.getMessageId());
+                return false;
+            }
+        }else {
+            //直接拒绝应答，删除消费
+            try {
+                memoryDataCenter.deleteMessageById(message.getMessageId());
+                if(message.getDurable()){
+                    diskDataCenter.deleteMessage(queue,message);
+                }
+                System.out.println("[VirtualHost] 拒绝应答中，选择直接删除消息，拒绝应答:queueName:" + queue.getName() + ",messageId:" + message.getMessageId());
+                return true;
+            }catch (Exception e){
+                System.out.println("[VirtualHost] 拒绝应答中，选择直接删除消息，拒绝应答:queueName:" + queue.getName() + ",messageId:" + message.getMessageId());
+                return false;
+            }
+        }
+    }
+
+
+    //消费者未确认消息追踪(用于断开连接时自动 requeue)
+
+    //登记：消费者开始处理某条消息
+    public void addConsumerUnAck(String consumerTag, String messageId) {
+        consumerUnAckMap.computeIfAbsent(consumerTag, k -> ConcurrentHashMap.newKeySet()).add(messageId);
+    }
+
+    //清理：消息被 ACK 或 NACK 后移除追踪
+    public void removeConsumerUnAck(String messageId) {
+        consumerUnAckMap.values().forEach(set -> set.remove(messageId));
+    }
+
+    //消费者断开连接：该 consumerTag 未确认的消息全部 requeue
+    public void requeueOnDisconnect(String channelId) {
+        Set<String> messageIds = consumerUnAckMap.remove(channelId);
+        if (messageIds == null || messageIds.isEmpty()) {
+            return;
+        }
+        for (String messageId : messageIds) {
+            Message message = memoryDataCenter.getUnAckMessageByMessageId(messageId);
+            if (message == null) {
+                continue;
+            }
+            try {
+                // 从 unAckMessage 移除
+                memoryDataCenter.deleteUnAckMessageByMessageId(messageId);
+                // 放回队头
+                // 需要找到消息所属队列——遍历 consumerQueueMap 找到对应队列名
+                String queueName = findQueueNameForMessage(messageId);
+                if (queueName != null) {
+                    MessageQueue queue = memoryDataCenter.selectQueue(queueName);
+                    if (queue != null) {
+                        memoryDataCenter.requeueMessage(queue, message);
+                    }
+                }
+                System.out.println("[VirtualHost] 消费者断开,未确认消息已 requeue:messageId:" + messageId);
+            } catch (mqException e) {
+                System.out.println("[VirtualHost] 消费者断开,requeue 失败:messageId:" + messageId);
+            }
+        }
+    }
+
+    //根据 messageId 找到所属队列名(遍历 messageBelongMap)
+    private String findQueueNameForMessage(String messageId) {
+        // 消息在 unAckMessage 时,已经从 messageBelongMap 中 poll 出去了
+        // 所以不能从 messageBelongMap 找,需要从 unAckMessageMap 找
+        return memoryDataCenter.findQueueNameByUnAckMessageId(messageId);
+    }
+
     //10.生产者连接断开后的交换机自动删除检查
-    //该 channel 若是某 autoDelete 交换机的“最后一个生产者”，则自动删除该交换机（复用 exchangeDelete，自带解绑+内存硬盘删除+锁保护）
+    //该 channel 若是某 autoDelete 交换机的"最后一个生产者"，则自动删除该交换机（复用 exchangeDelete，自带解绑+内存硬盘删除+锁保护）
     public void onProducerDisconnect(String channelId){
         if(channelId==null){
             return;
@@ -484,7 +617,7 @@ public class VirtualHost {
                 if(hasOtherProducer){
                     continue;
                 }
-                //最后一个生产者已断开，执行自动删除（name 是“原始”交换机名，exchangeDelete 内部会补虚拟主机前缀）
+                //最后一个生产者已断开，执行自动删除（name 是"原始"交换机名，exchangeDelete 内部会补虚拟主机前缀）
                 exchangeDelete(name);
                 System.out.println("[VirtualHost] 交换机自动删除成功(无生产者连接),exchangeName:"+virtualHostName+name);
             }catch (mqException e){
@@ -500,26 +633,26 @@ public class VirtualHost {
         if(channelId==null){
             return;
         }
-        //先移除本“追踪表”中的队列（与存储队列没有关系，内存+硬盘的并未因这步操作而删除）
+        //先移除本"追踪表"中的队列（与存储队列没有关系，内存+硬盘的并未因这步操作而删除）
             LinkedList<String> queues = consumerQueueMap.remove(channelId);
         if(queues==null || queues.size()==0){
             return;
         }
 
-        //检查本次channel删除后，是否有“消费标识”的队列中订阅消费者集合为空
+        //检查本次channel删除后，是否有"消费标识"的队列中订阅消费者集合为空
             for (String queueName:queues){
             // 检查本次channel删除后，是否有队列中订阅消费者集合为空
-            //追踪表存的是“原始”队列名，而 queueMap 的 key 带虚拟主机前缀，查询时需补前缀才能命中
+            //追踪表存的是"原始"队列名，而 queueMap 的 key 带虚拟主机前缀，查询时需补前缀才能命中
             MessageQueue queue = memoryDataCenter.selectQueue(virtualHostName+queueName);
-            //遍历查询是否打开“自动删除”/已经被删除了
-            //检查“已删除”/“未开启自动删除”的队列，则不用管
+            //遍历查询是否打开"自动删除"/已经被删除了
+            //检查"已删除"/"未开启自动删除"的队列，则不用管
             if (queue == null || !queue.isAutoDelete()) {
                 continue;
             }
 
             //检查这些队列是否消费者订阅集合为空
                 boolean ok = memoryDataCenter.ifEmptyQueue(queue);
-            //如果为空，则继续检查队列中是否还有消息：若有消息则不删除；若有的是“未确定消息”则删除
+            //如果为空，则继续检查队列中是否还有消息：若有消息则不删除；若有的是"未确定消息"则删除
                 if(ok){
                     //判断队列中有无消息
                     boolean messageOn=memoryDataCenter.ifEmptyMessageQueue(queue);
@@ -533,7 +666,7 @@ public class VirtualHost {
                 }
             //什么都没有，直接删除
             try {
-                //删除必须传“原始”队列名：queueDelete 内部会补前缀，若传 queue.getName()（已带前缀）会双重前缀导致删除失败
+                //删除必须传"原始"队列名：queueDelete 内部会补前缀，若传 queue.getName()（已带前缀）会双重前缀导致删除失败
                 queueDelete(queueName);
                 System.out.println("[VirtualHost] 队列自动删除成功，queueName:" + queue.getName());
             } catch (mqException e) {
@@ -550,10 +683,10 @@ public class VirtualHost {
             System.out.println("[VirtualHost] 登录失败:用户名或密码为空");
             return false;
         }
-        //根据“用户名”（主键）查询用户
+        //根据"用户名"（主键）查询用户
         UserInfo user = memoryDataCenter.getUser(userName);
         //判断用户是否存在
-        //注：对外统一返回false，不区分“用户不存在”和“密码错误”，避免被用于探测有效用户名；区分信息只进日志
+        //注：对外统一返回false，不区分"用户不存在"和"密码错误"，避免被用于探测有效用户名；区分信息只进日志
         if(user==null){
             System.out.println("[VirtualHost] 用户不存在:"+userName);
             return false;

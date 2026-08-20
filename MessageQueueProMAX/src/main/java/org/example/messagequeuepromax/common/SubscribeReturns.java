@@ -11,6 +11,8 @@ public class SubscribeReturns extends BasicReturns implements Serializable {
     private String consumerTag;
     private BasicProperties basicProperties;
     private byte[] body;
+    //消息ID:消费者在回调中通过此字段标识消息,用于显式调用 basicAck/basicReject
+    private String messageId;
 
     public String getConsumerTag() {
         return consumerTag;
@@ -34,5 +36,13 @@ public class SubscribeReturns extends BasicReturns implements Serializable {
 
     public void setBody(byte[] body) {
         this.body = body;
+    }
+
+    public String getMessageId() {
+        return messageId;
+    }
+
+    public void setMessageId(String messageId) {
+        this.messageId = messageId;
     }
 }

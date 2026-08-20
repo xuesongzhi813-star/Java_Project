@@ -19,7 +19,7 @@ public class ConsumerManager {
     private VirtualHost virtualHost;
     //线程池，本虚拟主机下可能有很多消费者，通过线程池帮助消费者同时处理调用消费
     private ExecutorService executorService;
-    //队列，存放“内部有消息的队列的名字”-->send消息后就会调用notified给这里加入新的“有消息的队列名”
+    //队列，存放"内部有消息的队列的名字"-->send消息后就会调用notified给这里加入新的"有消息的队列名"
     private BlockingQueue<String> tokens=new LinkedBlockingQueue<>();
     //扫描线程，不断遍历token队列，看哪个队列还有消息，取出来给线程池进行消费消息（执行回调函数）
     private Thread scannerThread=null;
@@ -56,7 +56,7 @@ public class ConsumerManager {
 
     //1.通知消费者消费
     public void notifyConsumer(String queueName) throws InterruptedException {
-        //添加给队列，借由“扫描线程”通知消费者调用
+        //添加给队列，借由"扫描线程"通知消费者调用
         tokens.put(queueName);
     }
 
@@ -97,12 +97,13 @@ public class ConsumerManager {
         if(message==null){
             return;
         }
-        //通过线程池调用回调函数，消费消息
+        //通过线程池调用回调函数，发送消息给消费者
         executorService.submit(()->{
             try {
                 //先将消息放入未确定消息队列（已经开始消费不知道结果）
                 virtualHost.getMemoryDataCenter().addUnAckMessage(queue.getName(),message);
                 //调用回调函数消费消息（若目标消费者连接已断开，服务器端 deliverMessage 会抛 IOException）
+                //这只是发送给消费者，但是具体消费还未进行
                 consumerEnv.getConsumer().deliverMessage(consumerEnv.getConsumerTag(), message.getBasicProperties(), message.getBody());
                 //消费完消息响应服务器，看是手动应答，还是自动应答
                 if(consumerEnv.isAutoAck()){
@@ -113,8 +114,10 @@ public class ConsumerManager {
                         virtualHost.getDiskDataCenter().deleteMessage(queue,message);
                     }
                 }else {
-                    //若是手动应答，调用basicAck
-                    virtualHost.basicAck(queue,message);
+                    //手动应答:不自动处理,消息留在 unAckMessage 中
+                    //登记 consumerTag→messageId 追踪,消费者断开连接时自动 requeue
+                    //消费者通过 Channel 显式调用 basicAck(type=0xb) 或 basicReject(type=0xf)
+                    virtualHost.addConsumerUnAck(consumerEnv.getConsumerTag(), message.getMessageId());
                 }
             } catch (IOException e) {
                 //投递失败（消费者连接已断开）：消息不能丢，重新放回队列

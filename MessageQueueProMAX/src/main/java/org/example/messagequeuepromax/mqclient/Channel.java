@@ -29,7 +29,7 @@ public class Channel {
         this.connection=connection;
     }
 
-    //1.告知服务器创建channel(本质就是让服务器那里“存储id”，交互时，可以找到信道),真正创建在connection就完成
+    //1.告知服务器创建channel(本质就是让服务器那里"存储id"，交互时，可以找到信道),真正创建在connection就完成
     public boolean createChannel() throws IOException {
         //构造请求
         BasicArguments basicArguments=new BasicAckArguments();
@@ -204,7 +204,7 @@ public class Channel {
     }
 
     //9. 发送消息
-    public boolean basicPublish(String exchangeName, String routingKey, BasicProperties basicProperties, byte[] body) throws IOException {
+    public PublishAckReturns basicPublish(String exchangeName, String routingKey, BasicProperties basicProperties, byte[] body) throws IOException {
         BasicPublishArguments arguments = new BasicPublishArguments();
         arguments.setRid(genereteRid());
         arguments.setChannelId(channelId);
@@ -220,8 +220,9 @@ public class Channel {
         request.setPayload(payload);
 
         connection.writeRequest(request);
-        BasicReturns basicReturns = waitReturn(arguments.getRid());
-        return basicReturns.isOk();
+        //此时返回的时PublishAckReturns
+        PublishAckReturns publishAckReturns = (PublishAckReturns) waitReturn(arguments.getRid());
+        return publishAckReturns;
     }
 
 
@@ -266,6 +267,25 @@ public class Channel {
 
         connection.writeRequest(request);
         BasicReturns basicReturns = waitReturn(arguments.getRid());
+        return basicReturns.isOk();
+    }
+
+    //拒绝应答
+    public boolean basicReject(MessageQueue queue,Message message,boolean requeue) throws IOException {
+        BasicRejectArguments arguments=new BasicRejectArguments();
+        arguments.setRid(genereteRid());
+        arguments.setChannelId(channelId);
+        arguments.setQueue(queue);
+        arguments.setMessage(message);
+        arguments.setRequeue(requeue);
+        byte[] payload = BinaryTool.toByte(arguments);
+        Request request=new Request();
+        request.setType(0xf);
+        request.setLength(payload.length);
+        request.setPayload(payload);
+
+        connection.writeRequest(request);
+        BasicReturns basicReturns=waitReturn(arguments.getRid());
         return basicReturns.isOk();
     }
 
