@@ -39,9 +39,24 @@ public class VirtualHost {
     //key：consumerTag（即channelId），value：该消费者持有的未确认消息ID集合
     private ConcurrentHashMap<String, Set<String>> consumerUnAckMap=new ConcurrentHashMap<>();
 
+    //消息处置执行器：所有"消息结束当前生命周期"的操作（ACK/REQUEUE/DEAD_LETTER/DISCARD）统一从这里出去
+    private MessageDisposer messageDisposer;
+
+    //消费者管理器单例：之前每次发消息/订阅/拒绝都 new 一个（每次都新建线程池+扫描线程，纯资源泄漏），
+    //现改为虚拟主机构造时创建一次，全虚拟主机复用
+    private ConsumerManager consumerManager;
+
 
     public String getVirtualHostName() {
         return virtualHostName;
+    }
+
+    //剥掉虚拟主机前缀（未带前缀则原样返回）：供"传入对象可能已带前缀"的路径防双重前缀使用
+    private String stripPrefix(String name){
+        if(name!=null && name.startsWith(virtualHostName)){
+            return name.substring(virtualHostName.length());
+        }
+        return name;
     }
 
     public void setVirtualHostName(String virtualHostName) {
@@ -64,6 +79,14 @@ public class VirtualHost {
         this.memoryDataCenter = memoryDataCenter;
     }
 
+    public ConsumerManager getConsumerManager() {
+        return consumerManager;
+    }
+
+    public MessageDisposer getMessageDisposer() {
+        return messageDisposer;
+    }
+
     //构造方法，传参虚拟主机名字-->作为区别不同虚拟主机的"唯一标识"
     public VirtualHost(String VirtualHostName) {
         this.virtualHostName=VirtualHostName;
@@ -76,6 +99,10 @@ public class VirtualHost {
             System.out.println("[VirtualHost] 虚拟主机恢复内存数据失败");
             throw new RuntimeException(e);
         }
+        //内存/硬盘数据就绪后，创建消费者管理器单例（其扫描线程会访问内存数据中心，必须晚于 recovery）
+        consumerManager=new ConsumerManager(this);
+        //消息处置执行器（需要 consumerManager 通知消费，故晚于它创建）
+        messageDisposer=new MessageDisposer(this);
     }
 
     /**
@@ -260,8 +287,10 @@ public class VirtualHost {
 
     //6.销毁绑定
     public boolean bindingDelete(Binding binding) throws mqException {
-        String exchangeName=virtualHostName+binding.getExchangeName();
-        String queueName=virtualHostName+binding.getQueueName();
+        //防双重前缀：客户端传入的 Binding 是"原始"名（需补前缀），
+        //但从 getUniqueBinding 等处取出的 Binding 已带前缀（再补会变成 defaultdefaultXxx 导致查不到）
+        String exchangeName=virtualHostName+stripPrefix(binding.getExchangeName());
+        String queueName=virtualHostName+stripPrefix(binding.getQueueName());
         //判断绑定是否存在
         Binding orderBinding=memoryDataCenter.getUniqueBinding(exchangeName, queueName);
         if(orderBinding==null){
@@ -424,7 +453,6 @@ public class VirtualHost {
             System.out.println();
             //通知消费者消费
         //三种交换机类型都要调用本方法（sendMessage），因为发送完消息，还要即使通知消费者来消费
-        ConsumerManager consumerManager=new ConsumerManager(this);
         consumerManager.notifyConsumer(queue.getName());
     }
 
@@ -433,7 +461,6 @@ public class VirtualHost {
     public boolean basicSubscribe(String qname,String consumerTag, boolean autoAck, Consumer consumer){
         String queueName=virtualHostName+qname;
         synchronized (queueLocker) {
-            ConsumerManager consumerManager = new ConsumerManager(this);
             //添加到指定队列的消费者集合
             try {
                 consumerManager.addConsumer(queueName,consumerTag,autoAck,consumer);
@@ -471,16 +498,9 @@ public class VirtualHost {
             System.out.println("[VirtualHost] 消息为空");
             return false;
         }
-        //进行手动应答
-        //删除消息：硬盘+内存+未确认消息+消息集合
+        //进行手动应答：处置统一走 MessageDisposer（未确认记录+consumerTag追踪+内存+硬盘一并删除）
         try {
-            memoryDataCenter.deleteMessageById(message.getMessageId());
-            memoryDataCenter.deleteUnAckMessage(queue.getName(),message.getMessageId());
-            if(message.getDurable()){
-                diskDataCenter.deleteMessage(queue,message);
-            }
-            //清理 consumerTag 追踪(消费者显式 ACK 后,不再需要断开重试保护)
-            removeConsumerUnAck(message.getMessageId());
+            messageDisposer.dispose(Disposition.ACK, queue, message, null);
             System.out.println("[VirtualHost] 手动应答成功:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
             return true;
         }catch (Exception e){
@@ -489,51 +509,81 @@ public class VirtualHost {
         }
     }
 
-    //拒绝应答
-    public boolean basicReject(MessageQueue queue,Message message,boolean requeue){
-        //检查队列
+    //拒绝应答（新签名）：BrokerServer 0xf 分发调用
+    //客户端只传 queueName + messageId + requeue，服务端反查权威消息对象后统一处置
+    public boolean basicReject(String queueName,String messageId,boolean requeue){
+        //补虚拟主机前缀，查权威队列
+        String realQueueName=virtualHostName+queueName;
+        MessageQueue queue=memoryDataCenter.selectQueue(realQueueName);
         if(queue==null){
+            System.out.println("[VirtualHost] 拒绝应答失败,队列不存在:queueName:"+realQueueName);
             return false;
         }
-        //检查消息
+        //权威反查：正常拒绝路径消息一定在“未确认”集合中（手动应答模式下投递后先挂 unAck）
+        Message message=memoryDataCenter.getUnAckMessage(realQueueName,messageId);
         if(message==null){
+            //兜底：从全局消息表查（极端时序下可能已被并发路径摘出 unAck）
+            try {
+                message=memoryDataCenter.selectMessageById(messageId);
+            }catch (mqException e){
+                //selectMessageById 在消息不存在时抛异常，保持 message=null 走下面的失败分支
+            }
+        }
+        if(message==null){
+            System.out.println("[VirtualHost] 拒绝应答失败,消息不存在或已被处理:messageId:"+messageId);
             return false;
         }
-        //先将消息从"未确认队列"中取出
-        memoryDataCenter.deleteUnAckMessage(queue.getName(),message.getMessageId());
-        //清理 consumerTag 追踪
-        removeConsumerUnAck(message.getMessageId());
-        //判断其是否需要返回队列消费
-        if(requeue){
-            try {
-                //需要返回队列重试:放回队头(用 requeueMessage,不用 sendMessage——消息已在 messageMap 中,无需重复登记)
-                memoryDataCenter.requeueMessage(queue,message);
-                //重新调用消费一次
-                ConsumerManager consumerManager=new ConsumerManager(this);
-                consumerManager.notifyConsumer(queue.getName());
-                System.out.println("[VirtualHost] 拒绝应答中，选择重新消息返回队列进行重试消费，queue:"+queue.getName()+"messageId:"+message.getMessageId());
-                return true;
-            } catch (mqException e) {
-                System.out.println("[VirtualHost] 重新放入队列中消费失败:queue:"+queue.getName()+",messageId:"+message.getMessageId());
-                return false;
-            } catch (InterruptedException e) {
-                System.out.println("[VirtualHost] 重新消费异常:queue:"+queue.getName()+":messageId:"+message.getMessageId());
-                return false;
-            }
-        }else {
-            //直接拒绝应答，删除消费
-            try {
-                memoryDataCenter.deleteMessageById(message.getMessageId());
-                if(message.getDurable()){
-                    diskDataCenter.deleteMessage(queue,message);
-                }
-                System.out.println("[VirtualHost] 拒绝应答中，选择直接删除消息，拒绝应答:queueName:" + queue.getName() + ",messageId:" + message.getMessageId());
-                return true;
-            }catch (Exception e){
-                System.out.println("[VirtualHost] 拒绝应答中，选择直接删除消息，拒绝应答:queueName:" + queue.getName() + ",messageId:" + message.getMessageId());
-                return false;
-            }
+        //决策（纯逻辑，无副作用）-> 执行（统一出口 MessageDisposer）
+        Disposition disposition=resolveDisposition(queue,message,requeue);
+        DeadLetterReason reason=disposition==Disposition.DEAD_LETTER
+                ?(requeue?DeadLetterReason.MAX_RETRY:DeadLetterReason.REJECTED):null;
+        boolean ok=messageDisposer.dispose(disposition,queue,message,reason);
+        System.out.println("[VirtualHost] 拒绝应答完成:queueName:"+realQueueName+",messageId:"+messageId
+                +",requeue:"+requeue+",disposition:"+disposition+",ok:"+ok);
+        return ok;
+    }
+
+    //旧签名保留为委托（兼容既有调用方/测试）
+    public boolean basicReject(MessageQueue queue,Message message,boolean requeue){
+        if(queue==null || message==null){
+            return false;
         }
+        //queue.getName() 可能已带虚拟主机前缀，剥掉再走新签名（新签名内部会补前缀）
+        return basicReject(stripPrefix(queue.getName()),message.getMessageId(),requeue);
+    }
+
+    /**
+     * 拒绝应答的处置决策（纯函数，无副作用）：
+     * - requeue=true  + 未超过队列配置的重试上限 -> REQUEUE（回队头重投）
+     * - requeue=true  + 超过 x-max-retry          -> DEAD_LETTER(MAX_RETRY)，打断无限重投循环
+     * - requeue=false + 队列配置了死信交换机        -> DEAD_LETTER(REJECTED)
+     * - requeue=false + 未配置死信交换机           -> DISCARD（直接丢弃，与 RabbitMQ 行为一致）
+     * 注：DEAD_LETTER 本期在 MessageDisposer.routeToDeadLetter 中为占位实现（降级丢弃），死信队列专项时填充
+     */
+    private Disposition resolveDisposition(MessageQueue queue,Message message,boolean requeue){
+        if(requeue){
+            int maxRetry=getMaxRetry(queue);
+            if(maxRetry>0 && message.getDeliveryCount()>=maxRetry){
+                System.out.println("[VirtualHost] 消息重试次数超限,转死信:queueName:"+queue.getName()
+                        +",messageId:"+message.getMessageId()+",deliveryCount:"+message.getDeliveryCount()+",maxRetry:"+maxRetry);
+                return Disposition.DEAD_LETTER;
+            }
+            return Disposition.REQUEUE;
+        }
+        if(queue.getArguments("x-dead-letter-exchange")!=null){
+            return Disposition.DEAD_LETTER;
+        }
+        return Disposition.DISCARD;
+    }
+
+    //读取队列 arguments 的 x-max-retry；未配置或类型异常返回 -1（=不限次数，保持旧行为）
+    //注：队列从数据库恢复时 arguments 由 JSON 反序列化而来，数值可能是 Integer/Long 等，统一按 Number 取整
+    private int getMaxRetry(MessageQueue queue){
+        Object value=queue.getArguments("x-max-retry");
+        if(value instanceof Number){
+            return ((Number)value).intValue();
+        }
+        return -1;
     }
 
 
@@ -560,30 +610,18 @@ public class VirtualHost {
             if (message == null) {
                 continue;
             }
-            try {
-                // 从 unAckMessage 移除
-                memoryDataCenter.deleteUnAckMessageByMessageId(messageId);
-                // 放回队头
-                // 需要找到消息所属队列——遍历 consumerQueueMap 找到对应队列名
-                String queueName = findQueueNameForMessage(messageId);
-                if (queueName != null) {
-                    MessageQueue queue = memoryDataCenter.selectQueue(queueName);
-                    if (queue != null) {
-                        memoryDataCenter.requeueMessage(queue, message);
-                    }
-                }
-                System.out.println("[VirtualHost] 消费者断开,未确认消息已 requeue:messageId:" + messageId);
-            } catch (mqException e) {
-                System.out.println("[VirtualHost] 消费者断开,requeue 失败:messageId:" + messageId);
+            //按 messageId 反查消息所属队列（消息还在 unAckMessageMap 中，其外层 key 就是队列名）
+            String queueName = memoryDataCenter.findQueueNameByUnAckMessageId(messageId);
+            MessageQueue queue = queueName == null ? null : memoryDataCenter.selectQueue(queueName);
+            if (queue == null) {
+                continue;
             }
+            //处置统一走 MessageDisposer：
+            //1. 消除与 basicReject 等处手写 requeue 逻辑的漂移风险
+            //2. 顺带修复原实现“requeue 后不通知消费”的隐患——消息放回队头却要等下一次 publish 才会被消费
+            messageDisposer.dispose(Disposition.REQUEUE, queue, message, DeadLetterReason.CONSUMER_DISCONNECT);
+            System.out.println("[VirtualHost] 消费者断开,未确认消息已 requeue:messageId:" + messageId);
         }
-    }
-
-    //根据 messageId 找到所属队列名(遍历 messageBelongMap)
-    private String findQueueNameForMessage(String messageId) {
-        // 消息在 unAckMessage 时,已经从 messageBelongMap 中 poll 出去了
-        // 所以不能从 messageBelongMap 找,需要从 unAckMessageMap 找
-        return memoryDataCenter.findQueueNameByUnAckMessageId(messageId);
     }
 
     //10.生产者连接断开后的交换机自动删除检查

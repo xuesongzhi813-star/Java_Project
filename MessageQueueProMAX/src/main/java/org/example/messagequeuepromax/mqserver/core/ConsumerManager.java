@@ -107,12 +107,8 @@ public class ConsumerManager {
                 consumerEnv.getConsumer().deliverMessage(consumerEnv.getConsumerTag(), message.getBasicProperties(), message.getBody());
                 //消费完消息响应服务器，看是手动应答，还是自动应答
                 if(consumerEnv.isAutoAck()){
-                    //消息消费完成，从硬盘+内存+未确定消息集合+消息集合中删除
-                    virtualHost.getMemoryDataCenter().deleteUnAckMessage(queue.getName(), message.getMessageId());
-                    virtualHost.getMemoryDataCenter().deleteMessageById(message.getMessageId());
-                    if(message.getDurable()){
-                        virtualHost.getDiskDataCenter().deleteMessage(queue,message);
-                    }
+                    //消息消费完成，处置统一走 MessageDisposer（未确认记录+内存+硬盘一并删除）
+                    virtualHost.getMessageDisposer().dispose(Disposition.ACK, queue, message, null);
                 }else {
                     //手动应答:不自动处理,消息留在 unAckMessage 中
                     //登记 consumerTag→messageId 追踪,消费者断开连接时自动 requeue
@@ -120,13 +116,8 @@ public class ConsumerManager {
                     virtualHost.addConsumerUnAck(consumerEnv.getConsumerTag(), message.getMessageId());
                 }
             } catch (IOException e) {
-                //投递失败（消费者连接已断开）：消息不能丢，重新放回队列
-                virtualHost.getMemoryDataCenter().deleteUnAckMessage(queue.getName(), message.getMessageId());
-                try {
-                    virtualHost.getMemoryDataCenter().requeueMessage(queue, message);
-                } catch (mqException mqException) {
-                    mqException.printStackTrace();
-                }
+                //投递失败（消费者连接已断开）：消息不能丢，重新放回队列（统一走 MessageDisposer，含通知消费）
+                virtualHost.getMessageDisposer().dispose(Disposition.REQUEUE, queue, message, DeadLetterReason.DELIVER_FAILED);
                 //该消费者已失联，从订阅集合中移除，避免下次继续选中它
                 try {
                     queue.deleteConsumerEnv(consumerEnv);
@@ -134,12 +125,6 @@ public class ConsumerManager {
                     mqException.printStackTrace();
                 }
                 System.out.println("[ConsumerManager] 消息投递失败，已重新入队:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
-                //重新通知消费，让消息尽快被活着的消费者消费掉
-                try {
-                    this.notifyConsumer(queue.getName());
-                } catch (InterruptedException interruptedException) {
-                    interruptedException.printStackTrace();
-                }
             } catch (mqException e) {
                 e.printStackTrace();
             }

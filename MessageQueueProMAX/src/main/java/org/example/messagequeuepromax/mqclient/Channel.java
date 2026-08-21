@@ -270,13 +270,13 @@ public class Channel {
         return basicReturns.isOk();
     }
 
-    //拒绝应答
-    public boolean basicReject(MessageQueue queue,Message message,boolean requeue) throws IOException {
+    //拒绝应答（新签名）：回调中直接用 basicProperties.getMessageId() 应答，无需构造 Message/MessageQueue 对象
+    public boolean basicReject(String queueName,String messageId,boolean requeue) throws IOException {
         BasicRejectArguments arguments=new BasicRejectArguments();
         arguments.setRid(genereteRid());
         arguments.setChannelId(channelId);
-        arguments.setQueue(queue);
-        arguments.setMessage(message);
+        arguments.setQueueName(queueName);
+        arguments.setMessageId(messageId);
         arguments.setRequeue(requeue);
         byte[] payload = BinaryTool.toByte(arguments);
         Request request=new Request();
@@ -287,6 +287,14 @@ public class Channel {
         connection.writeRequest(request);
         BasicReturns basicReturns=waitReturn(arguments.getRid());
         return basicReturns.isOk();
+    }
+
+    //拒绝应答（旧签名）：保留为委托，兼容既有调用方/测试
+    public boolean basicReject(MessageQueue queue,Message message,boolean requeue) throws IOException {
+        if(queue==null || message==null){
+            return false;
+        }
+        return basicReject(queue.getName(),message.getMessageId(),requeue);
     }
 
     //登录请求

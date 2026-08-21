@@ -297,9 +297,9 @@ public class BrokerServer {
             RegisterArguments arguments= (RegisterArguments) basicArguments;
             result=virtualHost.register(arguments.getUserName(), arguments.getPassword());
         } else if (request.getType()==0xf) {
-            //拒绝应答
+            //拒绝应答（轻量化参数：queueName+messageId+requeue，服务端按 messageId 反查权威消息）
             BasicRejectArguments arguments= (BasicRejectArguments) basicArguments;
-            result=virtualHost.basicReject(arguments.getQueue(),arguments.getMessage(),arguments.isRequeue());
+            result=virtualHost.basicReject(arguments.getQueueName(),arguments.getMessageId(),arguments.isRequeue());
         } else {
             //非法type
             throw new mqException("[BrokerServer] 请求typeAPI异常，请检查type:"+request.getType());

@@ -73,7 +73,7 @@ public class AutoDeleteTest {
         Assertions.assertTrue(ok);
         //消费者先离场（订阅清掉），再让生产者发消息进来 -> 队列中有残余消息且无人消费
         virtualHost.getMemoryDataCenter().removeConsumerByTag("consumer-1");
-        ok = virtualHost.basicPublish("autoDelExchange", "defaultautoDelQ", new BasicProperties(), "hello".getBytes());
+        ok = virtualHost.basicPublish("autoDelExchange", "defaultautoDelQ", new BasicProperties(), "hello".getBytes()).isOk();
         Assertions.assertTrue(ok);
         Thread.sleep(200);
 

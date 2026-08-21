@@ -8,11 +8,19 @@ import java.util.UUID;
  * 存储在本地文件（二进制格式）：长度+消息对象序列化的数据
  */
 public class Message implements Serializable {
+    //显式声明序列化版本号：新增字段（如 deliveryCount）对旧消息文件的反序列化是兼容的（缺字段取默认值）
+    private static final long serialVersionUID = 1L;
+
     //消息的基本属性，存储为一个对象
     private BasicProperties basicProperties;
 
     //消息的主体信息，采取二进制存储
     private byte[] body;
+
+    //重投递计数：消息每次被 REQUEUE（拒绝重试/投递失败/消费者断连）时自增
+    //配合队列 arguments 的 x-max-retry 上限，超过后消息转死信（未配置死信交换机则丢弃），
+    //打断"拒绝->回队->再拒绝"的无限重投循环
+    private int deliveryCount=0;
 
     //消息进行“逻辑删除”的标识
     private byte isValid=0x1;
@@ -39,6 +47,14 @@ public class Message implements Serializable {
             message.setRoutingKey(routingKey);
         }
         return message;
+    }
+
+    public int getDeliveryCount() {
+        return deliveryCount;
+    }
+
+    public void setDeliveryCount(int deliveryCount) {
+        this.deliveryCount = deliveryCount;
     }
 
     public BasicProperties getBasicProperties() {

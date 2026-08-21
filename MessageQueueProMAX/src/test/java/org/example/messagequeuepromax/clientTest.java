@@ -150,7 +150,7 @@ public class clientTest {
         Assertions.assertTrue(ok);
         ok=channel.bindingDeclare("testExchange","testQueue","");
         Assertions.assertTrue(ok);
-        ok=channel.basicPublish("testExchange","defaulttestQueue",new BasicProperties(),"hello".getBytes());
+        ok=channel.basicPublish("testExchange","defaulttestQueue",new BasicProperties(),"hello".getBytes()).isOk();
         Assertions.assertTrue(ok);
         byte[] bytes="hello".getBytes();
         ok=channel.basicSubscribe("testQueue", false, new Consumer() {
