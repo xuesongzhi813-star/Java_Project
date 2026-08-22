@@ -52,7 +52,7 @@ public class VirtualHost {
     }
 
     //剥掉虚拟主机前缀（未带前缀则原样返回）：供"传入对象可能已带前缀"的路径防双重前缀使用
-    private String stripPrefix(String name){
+    public String stripPrefix(String name){
         if(name!=null && name.startsWith(virtualHostName)){
             return name.substring(virtualHostName.length());
         }
@@ -364,7 +364,7 @@ public class VirtualHost {
                         messageId=message.getMessageId();
                         routingkey=message.getroutingKey();
                         //查询队列，并且直接发送
-                        MessageQueue queue = memoryDataCenter.selectQueue(routingKey);
+                        MessageQueue queue = memoryDataCenter.selectQueue(virtualHostName+routingKey);
                         sendMessage(queue,message);
                         System.out.println("[VirtualHost] DIRECT类型交换机发送消息成功:exchangeName:"+exchangeName
                         +",routingKey:"+routingKey);
@@ -443,7 +443,9 @@ public class VirtualHost {
        return publishAckReturns;
     }
 
-    private void sendMessage(MessageQueue queue, Message message) throws mqException, IOException, InterruptedException {
+    //public：死信转投复用本方法（内存+硬盘+通知消费三件套），且必须保留原消息对象和原 messageId
+    //（走 basicPublish 会生成新 messageId，破坏死信追溯链，且其 DIRECT 分支不补虚拟主机前缀）
+    public void sendMessage(MessageQueue queue, Message message) throws mqException, IOException, InterruptedException {
         //TOPIC类型发送消息
         //先存内存，再存硬盘
             memoryDataCenter.sendMessage(queue,message);
@@ -487,26 +489,43 @@ public class VirtualHost {
     }
 
     //9.手动应答，消息处理状态-->消费好了消息
-    public boolean basicAck(MessageQueue queue,Message message){
-        //检查队列
+    //手动应答（新签名）：BrokerServer 0xb 分发调用
+    //客户端只传 queueName + messageId，服务端按 messageId 从 unAck 反查权威消息对象（与 basicReject 对齐）
+    public boolean basicAck(String queueName,String messageId){
+        //补虚拟主机前缀，查权威队列
+        String realQueueName=virtualHostName+queueName;
+        MessageQueue queue=memoryDataCenter.selectQueue(realQueueName);
         if(queue==null){
-            System.out.println("[VirtualHost] 队列为空");
+            System.out.println("[VirtualHost] 手动应答失败,队列不存在:queueName:"+realQueueName);
             return false;
         }
-        //检查消息
+        //权威反查：手动应答模式下消息一定挂在"未确认"集合中（投递后先挂 unAck 等应答）
+        Message message=memoryDataCenter.getUnAckMessage(realQueueName,messageId);
         if(message==null){
-            System.out.println("[VirtualHost] 消息为空");
+            //兜底：从全局消息表查（极端时序下可能已被并发路径摘出 unAck）
+            try {
+                message=memoryDataCenter.selectMessageById(messageId);
+            }catch (mqException e){
+                //selectMessageById 在消息不存在时抛异常，保持 message=null 走下面的失败分支
+            }
+        }
+        if(message==null){
+            System.out.println("[VirtualHost] 手动应答失败,消息不存在或已被处理:messageId:"+messageId);
             return false;
         }
-        //进行手动应答：处置统一走 MessageDisposer（未确认记录+consumerTag追踪+内存+硬盘一并删除）
-        try {
-            messageDisposer.dispose(Disposition.ACK, queue, message, null);
-            System.out.println("[VirtualHost] 手动应答成功:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
-            return true;
-        }catch (Exception e){
-            System.out.println("[VirtualHost] 手动应答失败:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
+        //处置统一走 MessageDisposer（未确认记录+consumerTag追踪+内存+硬盘一并删除）
+        boolean ok=messageDisposer.dispose(Disposition.ACK,queue,message,null);
+        System.out.println("[VirtualHost] 手动应答完成:queueName:"+realQueueName+",messageId:"+messageId+",ok:"+ok);
+        return ok;
+    }
+
+    //旧签名保留为委托（兼容既有调用方/测试）
+    public boolean basicAck(MessageQueue queue,Message message){
+        if(queue==null || message==null){
             return false;
         }
+        //queue.getName() 可能已带虚拟主机前缀，剥掉再走新签名（新签名内部会补前缀）
+        return basicAck(stripPrefix(queue.getName()),message.getMessageId());
     }
 
     //拒绝应答（新签名）：BrokerServer 0xf 分发调用
@@ -558,9 +577,10 @@ public class VirtualHost {
      * - requeue=true  + 超过 x-max-retry          -> DEAD_LETTER(MAX_RETRY)，打断无限重投循环
      * - requeue=false + 队列配置了死信交换机        -> DEAD_LETTER(REJECTED)
      * - requeue=false + 未配置死信交换机           -> DISCARD（直接丢弃，与 RabbitMQ 行为一致）
-     * 注：DEAD_LETTER 本期在 MessageDisposer.routeToDeadLetter 中为占位实现（降级丢弃），死信队列专项时填充
      */
-    private Disposition resolveDisposition(MessageQueue queue,Message message,boolean requeue){
+    //public：决策规则全虚拟主机收敛到这一个方法，三个死信触发入口（basicReject/断连/投递失败）共用，
+    //避免各写各的判断（此前三处出现两个键名、两种类型处理，规则已漂移）
+    public Disposition resolveDisposition(MessageQueue queue,Message message,boolean requeue){
         if(requeue){
             int maxRetry=getMaxRetry(queue);
             if(maxRetry>0 && message.getDeliveryCount()>=maxRetry){
@@ -570,7 +590,7 @@ public class VirtualHost {
             }
             return Disposition.REQUEUE;
         }
-        if(queue.getArguments("x-dead-letter-exchange")!=null){
+        if(queue.getArguments("x-death-exchange")!=null){
             return Disposition.DEAD_LETTER;
         }
         return Disposition.DISCARD;
@@ -616,11 +636,16 @@ public class VirtualHost {
             if (queue == null) {
                 continue;
             }
-            //处置统一走 MessageDisposer：
-            //1. 消除与 basicReject 等处手写 requeue 逻辑的漂移风险
-            //2. 顺带修复原实现“requeue 后不通知消费”的隐患——消息放回队头却要等下一次 publish 才会被消费
-            messageDisposer.dispose(Disposition.REQUEUE, queue, message, DeadLetterReason.CONSUMER_DISCONNECT);
-            System.out.println("[VirtualHost] 消费者断开,未确认消息已 requeue:messageId:" + messageId);
+            //处置统一走 MessageDisposer：决策收敛到 resolveDisposition（与 basicReject/投递失败共用同一套规则）
+            //超 x-max-retry 转死信(MAX_RETRY)，否则 REQUEUE(CONSUMER_DISCONNECT) 等待下次消费
+            //注：不能内联强转 (Integer)getArguments("x-max-retry")——未配置时是 null（拆箱NPE），
+            //DB恢复后可能是 Long（强转CCE）；getMaxRetry 的 Number 兼容处理就在 resolveDisposition 里
+            Disposition disposition=resolveDisposition(queue,message,true);
+            DeadLetterReason reason=disposition==Disposition.DEAD_LETTER
+                    ?DeadLetterReason.MAX_RETRY:DeadLetterReason.CONSUMER_DISCONNECT;
+            messageDisposer.dispose(disposition,queue,message,reason);
+            System.out.println("[VirtualHost] 消费者断开,未确认消息已处置:messageId:" + messageId
+                    +",disposition:"+disposition);
         }
     }
 

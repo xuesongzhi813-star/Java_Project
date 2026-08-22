@@ -24,6 +24,16 @@ public class MessageQueue implements Serializable {
 
     //额外属性配置
     private Map<String,Object> arguments=new HashMap<>();
+    //配置额外属性，关于“死信”的处理
+    private void setArguments(Integer x_max_retry,String x_death_exchange,String x_death_routingKey){
+        arguments.put("x-max-retry",x_max_retry);
+        arguments.put("x-death-exchange",x_death_exchange);
+        arguments.put("x-death-routingKey",x_death_routingKey);
+        System.out.println("[MessageQueue] 配置死信队列实现的相关信息成功:x-max-retry:"+x_max_retry+",x-death-exchange:"+x_death_exchange
+        +",x-death-routingKey:"+x_death_routingKey);
+    }
+
+
 
     //管理订阅本队列的消费者集合
     List<ConsumerEnv> consumerEnvList=new ArrayList<>();
@@ -73,11 +83,17 @@ public class MessageQueue implements Serializable {
     }
 
     //从数据库中取出JSON，要转为哈希表才能set属性
+    //null/"null"防御：arguments 列可能存 SQL NULL 或序列化 null 得到的字符串 "null"，
+    //直接 readValue 会抛异常或还原成 null，导致后续 getArguments(key) 全部 NPE
     public void setArguments(String argument){
+        if(argument==null || "null".equals(argument)){
+            this.arguments=new HashMap<>();
+            return;
+        }
         ObjectMapper objectMapper=new ObjectMapper();
         Map<String, Object> stringObjectMap = objectMapper.readValue(argument, new TypeReference<Map<String, Object>>() {
         });
-        this.arguments=stringObjectMap;
+        this.arguments=(stringObjectMap!=null)?stringObjectMap:new HashMap<>();
     }
 
     //从对象中get哈希表属性，要转换为JSON字符串才能进行插入操作
@@ -99,8 +115,10 @@ public class MessageQueue implements Serializable {
         this.arguments.put(key, value);
     }
 
+    //null防御：客户端 queueDeclare 可能传 null（demo 现状就是传 null），
+    //直接赋 null 会覆盖字段初始化的空表，后续 getArguments(key) 全部 NPE
     public void setArguments(Map<String,Object> arguments) {
-        this.arguments=arguments;
+        this.arguments=(arguments!=null)?arguments:new HashMap<>();
     }
 
     //添加订阅的消费者

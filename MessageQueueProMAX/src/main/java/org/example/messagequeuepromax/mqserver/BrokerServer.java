@@ -80,7 +80,7 @@ public class BrokerServer {
                     //2.根据请求，处理业务+产出响应
                     Response response = proccess(request, clientSocket);
                     //3.将响应发送回客户端
-                    writeResponse(dataOutputStream, response);
+                    sendResponse(clientSocket, response);
                 }
             }
         } catch (IOException | mqException e) {
@@ -108,10 +108,16 @@ public class BrokerServer {
         //删除当前socket对应的channel（因为socket已关闭）
         for (String channelId:list){
             connectionMap.remove(channelId);
+            //断连清理顺序必须是：清订阅 -> requeue -> 查自动删除，理由：
+            //1.先清订阅：否则 requeue 会 notifyConsumer，扫描线程立刻又选中这个"连接已死但订阅未清"
+            //   的消费者，投递必然 IOException，同一消息被反复 requeue
+            //2.再 requeue：此时队列一定还在（自动删除还没发生），消息有处可回；
+            //   且订阅已清，重投的消息只会给其他活着的消费者
+            //3.最后查自动删除：requeue 后消息已回到 messageBelongMap，
+            //   onConsumerDisconnect 的 ifEmptyMessageQueue 检查会拦住"队列里还有消息"的队列不删，消息不丢
+            virtualHost.getMemoryDataCenter().removeConsumerByTag(channelId);
             //消费者断开连接：该 channel 未确认的消息全部 requeue，避免消息丢失
             virtualHost.requeueOnDisconnect(channelId);
-            //消费者连接断开时，同步清理该 channel（consumerTag）对应的订阅，避免死订阅继续占位
-            virtualHost.getMemoryDataCenter().removeConsumerByTag(channelId);
             virtualHost.onConsumerDisconnect(channelId);
             //生产者连接断开时，同步检查该 channel 关联的 autoDelete 交换机，无其他生产者则自动删除
             virtualHost.onProducerDisconnect(channelId);
@@ -160,6 +166,16 @@ public class BrokerServer {
         dataOutputStream.write(response.getPayload());
     }
 
+    //线程安全的响应写出：消息推送(ConsumerManager线程池)与普通业务响应(连接处理线程)
+    //可能并发写同一个客户端socket，必须按socket互斥，
+    //否则"类型+长度+载荷"的字节交错会打碎协议流，客户端读出错误长度后撞EOF
+    private void sendResponse(Socket socket, Response response) throws IOException {
+        synchronized (socket) {
+            DataOutputStream dataOutputStream=new DataOutputStream(socket.getOutputStream());
+            writeResponse(dataOutputStream,response);
+        }
+    }
+
     //处理请求
     private Response proccess(Request request, Socket clientSocket) throws mqException {
         //先解析request的所有部分
@@ -188,7 +204,11 @@ public class BrokerServer {
             //关闭channel
             connectionMap.remove(basicArguments.getChannelId());
             //关闭channel时，同步清理该消费者（consumerTag==channelId）的订阅，避免死订阅继续占位
+            //（先清订阅再 requeue，顺序理由同 closeChannel：防止重投消息再次选中本 channel 的死订阅）
             virtualHost.getMemoryDataCenter().removeConsumerByTag(basicArguments.getChannelId());
+            //主动关 channel 也必须 requeue 未确认消息：本 channel 已移出 connectionMap，
+            //连接断开的 finally 清理不会再处理它，不在这里处理的话未确认消息会永久滞留在 unAckMessageMap
+            virtualHost.requeueOnDisconnect(basicArguments.getChannelId());
             //关闭channel时，检查本次队列中订阅消费者是否为空，若为空则自动删除
             virtualHost.onConsumerDisconnect(basicArguments.getChannelId());
             //关闭channel时，同步检查该生产者 channel 关联的 autoDelete 交换机，无其他生产者则自动删除
@@ -267,14 +287,19 @@ public class BrokerServer {
                             response.setLength(payload.length);
                             response.setPayload(payload);
                             //响应写入客户端
-                            DataOutputStream dataOutputStream=new DataOutputStream(socket.getOutputStream());
-                            writeResponse(dataOutputStream,response);
+                            //内部按socket互斥：与连接处理线程的响应写出并发时，
+                            //不打锁会交错字节，破坏"类型+长度+载荷"的协议流
+                            sendResponse(socket,response);
                         }
                     });
         } else if (request.getType()==0xb) {
-            //手动应答
+            //手动应答（轻量化参数优先：queueName+messageId，服务端反查权威消息；旧参数对象兼容保留）
             BasicAckArguments arguments= (BasicAckArguments) basicArguments;
-            result=virtualHost.basicAck(arguments.getQueue(), arguments.getMessage());
+            if(arguments.getQueueName()!=null && arguments.getMessageId()!=null){
+                result=virtualHost.basicAck(arguments.getQueueName(),arguments.getMessageId());
+            }else {
+                result=virtualHost.basicAck(arguments.getQueue(), arguments.getMessage());
+            }
         } else if (request.getType()==0xd) {
             //用户登录请求
             LoginArguments arguments= (LoginArguments) basicArguments;

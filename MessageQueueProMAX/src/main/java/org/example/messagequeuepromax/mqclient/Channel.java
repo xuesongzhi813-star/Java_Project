@@ -252,13 +252,13 @@ public class Channel {
         return basicReturns.isOk();
     }
 
-    // 确认消息
-    public boolean basicAck(MessageQueue queue, Message message) throws IOException {
+    // 确认消息（新签名）：回调中直接用 basicProperties.getMessageId() 应答，无需构造 Message/MessageQueue 对象
+    public boolean basicAck(String queueName, String messageId) throws IOException {
         BasicAckArguments arguments = new BasicAckArguments();
         arguments.setRid(genereteRid());
         arguments.setChannelId(channelId);
-        arguments.setQueue(queue);
-        arguments.setMessage(message);
+        arguments.setQueueName(queueName);
+        arguments.setMessageId(messageId);
         byte[] payload = BinaryTool.toByte(arguments);
         Request request = new Request();
         request.setType(0xb);
@@ -268,6 +268,14 @@ public class Channel {
         connection.writeRequest(request);
         BasicReturns basicReturns = waitReturn(arguments.getRid());
         return basicReturns.isOk();
+    }
+
+    // 确认消息（旧签名）：保留为委托，兼容既有调用方/测试
+    public boolean basicAck(MessageQueue queue, Message message) throws IOException {
+        if(queue==null || message==null){
+            return false;
+        }
+        return basicAck(queue.getName(), message.getMessageId());
     }
 
     //拒绝应答（新签名）：回调中直接用 basicProperties.getMessageId() 应答，无需构造 Message/MessageQueue 对象

@@ -1,8 +1,13 @@
 package org.example.messagequeuepromax.mqserver.core;
 
+import org.example.messagequeuepromax.common.mqException;
 import org.example.messagequeuepromax.mqserver.VirtualHost;
 import org.example.messagequeuepromax.mqserver.datacenter.DiskDataCenter;
 import org.example.messagequeuepromax.mqserver.datacenter.MemoryDataCenter;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 消息处置执行器：全虚拟主机内，"消息结束当前生命周期"的唯一出口
@@ -108,30 +113,80 @@ public class MessageDisposer {
         }
     }
 
+    //死信元信息在消息头(basicProperties.headers)里的 key：客户端消费死信时由此取回 DeadLetterInfo
+    public static final String X_DEATH = "x-death";
+
     /**
-     * 死信路由 —— 本期为占位实现，死信队列专项时填充
+     * 死信路由：把死掉的消息转投到"死信队列"（约定式设计，沿用原有思路）：
+     *  - 队列配置 x-death-exchange 指定死信交换机名（键名与决策层 resolveDisposition 统一）
+     *  - 死信队列名 = 死信交换机名 + "_queue"（约定配对创建）
+     *    （不能用 "-queue"：Router.chechRoutingKey 不允许连字符，死信若被再次经交换机发布会被拦截）
+     *  - 未配置死信交换机 / 死信队列未创建：降级为 DISCARD（与 RabbitMQ 行为一致）
      *
-     * 占位语义：
-     *  - 队列未配置 x-dead-letter-exchange：降级为 DISCARD（与 RabbitMQ 行为一致）
-     *  - 已配置：同样先安全丢弃（打印日志标记），转投逻辑（查DLX->路由->sendMessage->通知消费）下一期实现
-     *
-     * 将来实现时本方法体替换为：
-     *  1. 从原队列删干净（复用 purgeMessage 的删除部分，但不删 messageMap——转投目标还要用）
-     *  2. 附记死信元信息（reason/原队列名/时间戳），保留原 messageId 不重新生成，保证可追溯
-     *  3. routingKey 取队列 arguments 的 x-dead-letter-routing-key，缺省用原消息 routingKey
-     *  4. 复用现有路由：查死信交换机 -> 按 DIRECT/FANOUT/TOPIC 走 Router 匹配绑定 -> sendMessage 到死信队列
-     *  5. 通知死信队列消费
+     * 转投不走 basicPublish，直接对目标队列 sendMessage，原因：
+     *  1. basicPublish 的 messageFactory 会生成新 messageId，破坏死信追溯链（必须保留原 id）
+     *  2. basicPublish 的 DIRECT 分支 selectQueue 不补虚拟主机前缀（老问题，Producer1Demo 靠手写前缀绕过）
+     * sendMessage 自带"内存+硬盘+通知消费"三件套，转投即完成
      */
     private boolean routeToDeadLetter(MessageQueue queue, Message message, DeadLetterReason reason) {
-        Object dlx = queue.getArguments("x-dead-letter-exchange");
-        purgeMessage(queue, message);
+        //1. 读队列配置的死信交换机（先判空再 toString，顺序不能反；键名统一为 x-death-exchange）
+        Object dlx = queue.getArguments("x-death-exchange");
         if (dlx == null) {
             System.out.println("[MessageDisposer] 队列未配置死信交换机，消息降级丢弃:queueName:" + queue.getName()
                     + ",messageId:" + message.getMessageId() + ",reason:" + reason);
-        } else {
-            System.out.println("[MessageDisposer] [占位]死信转投尚未实现，消息暂被丢弃:queueName:" + queue.getName()
-                    + ",dlx:" + dlx + ",messageId:" + message.getMessageId() + ",reason:" + reason);
+            purgeMessage(queue, message);
+            return false;
         }
-        return true;
+        String dlxName = dlx.toString();
+
+        //2. 按约定推导死信队列名（补虚拟主机前缀才是 queueMap 里的真实 key）
+        MessageQueue dlQueue = memoryDataCenter.selectQueue(virtualHost.getVirtualHostName() + dlxName + "_queue");
+        if (dlQueue == null) {
+            System.out.println("[MessageDisposer] 死信队列未按约定创建(约定名:" + dlxName + "_queue)，消息降级丢弃:queueName:"
+                    + queue.getName() + ",messageId:" + message.getMessageId() + ",reason:" + reason);
+            purgeMessage(queue, message);
+            return false;
+        }
+
+        //3. 把原队列侧清干净：unAck + consumerTag追踪 + messageMap + 原队列硬盘文件
+        //   messageMap 会被下面 sendMessage 用同一个 messageId 重新登记（同一个对象），先删后插无副作用
+        purgeMessage(queue, message);
+
+        //4. 附死信元信息到消息头（客户端消费死信时从 basicProperties.headers 取回）+ 重置重投计数
+        //   deliveryCount 必须归零：进死信队列就是"新人"，否则死信队列若也配 x-max-retry，消息一投递就"超限"
+        DeadLetterInfo deadLetterInfo = new DeadLetterInfo();
+        deadLetterInfo.setReason(reason);
+        deadLetterInfo.setCount(1);
+        deadLetterInfo.setDeadLetterAt(System.currentTimeMillis());
+        deadLetterInfo.setOriginalQueue(virtualHost.stripPrefix(queue.getName()));
+        deadLetterInfo.setOriginalRoutingKey(message.getroutingKey());
+        BasicProperties properties = message.getBasicProperties();
+        Map<String, Object> headers = properties.getHeaders();
+        if (headers == null) {
+            headers = new HashMap<>();
+            properties.setHeaders(headers);
+        }
+        headers.put(X_DEATH, deadLetterInfo);
+        message.setDeliveryCount(0);
+
+        //5. routingKey 改为死信队列名（原 rk 已存入死信元信息，可追溯），
+        //   死信若被再次经交换机发布，恰好路由回死信队列
+        message.setRoutingKey(dlxName + "_queue");
+
+        //6. 持久化对齐：durable 消息进非 durable 死信队列时降级
+        //   （非 durable 队列没有消息文件，writeMessage 会失败）
+        message.setdurable(dlQueue.isDurable() && message.getDurable());
+
+        //7. 转投：内存登记 + 硬盘落盘 + notifyConsumer 全在 sendMessage 里
+        try {
+            virtualHost.sendMessage(dlQueue, message);
+            System.out.println("[MessageDisposer] 死信转投成功:原队列:" + queue.getName()
+                    + ",死信队列:" + dlQueue.getName() + ",messageId:" + message.getMessageId() + ",reason:" + reason);
+            return true;
+        } catch (Exception e) {
+            System.out.println("[MessageDisposer] 死信转投失败:queueName:" + queue.getName()
+                    + ",messageId:" + message.getMessageId() + ",reason:" + reason);
+            return false;
+        }
     }
 }

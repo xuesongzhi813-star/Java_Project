@@ -32,7 +32,7 @@ public class Producer1Demo {
 
         //创建一个消息并发送
         byte[] body="hello".getBytes();
-        PublishAckReturns publishAckReturns =channel.basicPublish("testExchange","defaulttestQueue",new BasicProperties(),body);
+        PublishAckReturns publishAckReturns =channel.basicPublish("testExchange","testQueue",new BasicProperties(),body);
         System.out.println("目标交换机:"+publishAckReturns.getExchangeName());
         System.out.println("消息发送:"+publishAckReturns.isOk());
         System.out.println("消息Id标识:"+publishAckReturns.getMessageId());

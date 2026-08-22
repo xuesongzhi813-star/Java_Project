@@ -15,5 +15,5 @@ public interface Consumer {
      * @param basicProperties
      * @param body
      */
-    public void deliverMessage(String consumerTag, BasicProperties basicProperties,byte[] body) throws IOException;
+    public void deliverMessage(String consumerTag, BasicProperties basicProperties,byte[] body) throws IOException, mqException;
 }

@@ -18,7 +18,7 @@
         exclusive boolean,
         durable boolean,
         autoDelete boolean,
-        arguments varchar(50)
+        arguments varchar(100)
         );
     </update>
 

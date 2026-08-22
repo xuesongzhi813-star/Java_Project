@@ -37,15 +37,18 @@ public class ConsumerManager {
                     String queueName = tokens.take();
                     MessageQueue queue=virtualHost.getMemoryDataCenter().selectQueue(queueName);
                     if(queue==null){
-                        throw new mqException("[ConsumerManager] 该队列不存在");
+                        continue;
                     }
                     //存在则开始消费消息
                     synchronized (queue){
                         //交给线程池去消费，本线程只负责扫描，找到有消息的队列
                         consumeMessage(queue);
                     }
-                } catch (InterruptedException | mqException e) {
-                    throw new RuntimeException(e);
+                }catch (InterruptedException e){
+                    break;//服务器结束
+                }
+                catch (mqException e) {
+                    e.printStackTrace();
                 }
             }
         });
@@ -116,15 +119,19 @@ public class ConsumerManager {
                     virtualHost.addConsumerUnAck(consumerEnv.getConsumerTag(), message.getMessageId());
                 }
             } catch (IOException e) {
-                //投递失败（消费者连接已断开）：消息不能丢，重新放回队列（统一走 MessageDisposer，含通知消费）
-                virtualHost.getMessageDisposer().dispose(Disposition.REQUEUE, queue, message, DeadLetterReason.DELIVER_FAILED);
+                //投递失败（消费者连接已断开）：决策统一走 resolveDisposition（与 basicReject/断连共用规则）
+                //超 x-max-retry 转死信(MAX_RETRY)，否则 REQUEUE(DELIVER_FAILED) 重投
+                //注：不内联强转 (Integer)getArguments("x-max-retry")，未配置时 null 拆箱 NPE
+                Disposition disposition=virtualHost.resolveDisposition(queue,message,true);
+                DeadLetterReason reason=disposition==Disposition.DEAD_LETTER
+                        ?DeadLetterReason.MAX_RETRY:DeadLetterReason.DELIVER_FAILED;
+                virtualHost.getMessageDisposer().dispose(disposition,queue,message,reason);
                 //该消费者已失联，从订阅集合中移除，避免下次继续选中它
-                try {
-                    queue.deleteConsumerEnv(consumerEnv);
-                } catch (mqException mqException) {
-                    mqException.printStackTrace();
-                }
-                System.out.println("[ConsumerManager] 消息投递失败，已重新入队:queueName:"+queue.getName()+",messageId:"+message.getMessageId());
+                //按 tag 幂等删除：断连清理(closeChannel->removeConsumerByTag)可能已抢先移除过同一订阅，
+                //再按对象删会抛"订阅不存在"；deleteConsumerEnvByTag 不存在时静默返回 false，天然幂等
+                queue.deleteConsumerEnvByTag(consumerEnv.getConsumerTag());
+                System.out.println("[ConsumerManager] 消息投递失败，已处置:queueName:"+queue.getName()
+                        +",messageId:"+message.getMessageId()+",disposition:"+disposition);
             } catch (mqException e) {
                 e.printStackTrace();
             }

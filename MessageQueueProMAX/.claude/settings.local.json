@@ -45,7 +45,12 @@
       "PowerShell([Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content \".\\\\reject-test-log.txt\" -Encoding UTF8 | Select-String -Pattern \"删除成功|降级|重新入队|未确认消息添加|消息添加成功|发出\" | ForEach-Object { $_.Line.Trim\\(\\) } | Select-Object -First 40)",
       "PowerShell(Get-Content *)",
       "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.12.8-hotspot\"; .\\\\mvnw.cmd test \"-Dtest=VirtualHostTest#basicRejectTest\" 2>&1 | Select-String -Pattern \"Tests run:|BUILD\" | Select-Object -Last 3)",
-      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.12.8-hotspot\"; .\\\\mvnw.cmd test 2>&1 | Select-String -Pattern \"Tests run: 71|BUILD\" | Select-Object -Last 3; .\\\\mvnw.cmd test 2>&1 | Select-String -Pattern \"Tests run: 71|BUILD\" | Select-Object -Last 3)"
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-21.0.12.8-hotspot\"; .\\\\mvnw.cmd test 2>&1 | Select-String -Pattern \"Tests run: 71|BUILD\" | Select-Object -Last 3; .\\\\mvnw.cmd test 2>&1 | Select-String -Pattern \"Tests run: 71|BUILD\" | Select-Object -Last 3)",
+      "PowerShell(java *)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd -q compile -DskipTests 2>&1 | Select-Object -Last 15)",
+      "PowerShell($lines = Get-Content \"src\\\\main\\\\java\\\\org\\\\example\\\\messagequeuepromax\\\\mqserver\\\\core\\\\MessageDisposer.java\"; \\(116..128\\) | ForEach-Object { $l = $lines[$_-1]; $codes = \\($l.ToCharArray\\(\\) | ForEach-Object { [int]$_ }\\) -join ','; \"$_`: [$l]\" })",
+      "PowerShell($lines = Get-Content \"src\\\\main\\\\java\\\\org\\\\example\\\\messagequeuepromax\\\\mqserver\\\\core\\\\MessageDisposer.java\"; foreach\\($n in 117,118,119,120,123,126,128,129,130\\){ $l = $lines[$n-1]; $codes = \\($l.ToCharArray\\(\\) | ForEach-Object { '{0:X4}' -f [int]$_ }\\) -join ' '; \"$_`: $codes\" })",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Java\\\\jdk-17\"; .\\\\mvnw.cmd -q compile -DskipTests 2>&1 | Select-Object -Last 10)"
     ]
   }
 }

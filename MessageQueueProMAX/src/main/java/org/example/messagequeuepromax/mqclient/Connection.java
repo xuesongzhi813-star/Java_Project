@@ -71,7 +71,7 @@ public class Connection {
                 try {
                     channel.getConsumer().deliverMessage(subScribeReturns.getConsumerTag()
                             ,subScribeReturns.getBasicProperties(), subScribeReturns.getBody());
-                } catch (IOException e) {
+                } catch (IOException | mqException e) {
                     throw new RuntimeException(e);
                 }
             });
